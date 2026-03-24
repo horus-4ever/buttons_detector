@@ -56,10 +56,12 @@ class PRTR(nn.Module):
         
         pred_logits = self.class_head(hs)         # [B, num_queries, num_classes+1]
         pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 2]
+        pred_holes = self.holes_head(hs).sigmoid() # [B, num_queries, 2]
 
         return {
             "pred_logits": pred_logits,
             "pred_buttons": pred_buttons,
+            "pred_holes": pred_holes,
             "memory": memory
         }
 

@@ -99,7 +99,7 @@ class HungarianMatcher(nn.Module):
     """
     Matches predicted queries to GT buttons.
 
-    Cost = classification cost + coordinate L1 cost
+    Cost = classification cost + coordinate cost
     """
 
     def __init__(self, cost_class: float = 1.0, cost_coord: float = 5.0):
@@ -138,9 +138,8 @@ class HungarianMatcher(nn.Module):
 
         for b in range(bs):
             tgt_labels = targets[b]["labels"]     # [num_gt]
-            # print(tgt_labels)
             tgt_coords = targets[b]["buttons"]    # [num_gt, 2]
-            # print(tgt_coords)
+
 
             if tgt_coords.numel() == 0:
                 indices.append((
@@ -243,13 +242,37 @@ class SetCriterion(nn.Module):
             # loss_button = loss_button + (exp(15 * loss_button) - 1)
 
         return {"loss_button": loss_button}
+    
+    def loss_holes(self, outputs, targets, indices):
+        src_coords = outputs["pred_holes"]
+        bs, q, _ = src_coords.shape
+
+        matched_pred = []
+        matched_tgt = []
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if len(src_idx) > 0:
+                matched_pred.append(src_coords[b, src_idx])
+                matched_tgt.append(targets[b]["pred_holes"][tgt_idx].to(src_coords.device))
+
+        if len(matched_pred) == 0:
+            loss_holes = torch.tensor(0.0, device=src_coords.device)
+        else:
+            matched_pred = torch.cat(matched_pred, dim=0)
+            matched_tgt = torch.cat(matched_tgt, dim=0)
+            loss_holes = torch.norm(matched_pred - matched_tgt, dim=-1).mean()
+
+        return {"loss_holes": loss_holes}
 
     def forward(self, outputs, targets):
-        indices = self.matcher(outputs, targets)
+        button_targets = targets["button"]
+        holes_targets = targets["holes"]
+        indices = self.matcher(outputs, button_targets)
 
         losses = {}
-        losses.update(self.loss_labels(outputs, targets, indices))
-        losses.update(self.loss_buttons(outputs, targets, indices))
+        losses.update(self.loss_labels(outputs, button_targets, indices))
+        losses.update(self.loss_buttons(outputs, button_targets, indices))
+        losses.update(self.loss_holes(outputs, holes_targets, indices))
 
         total_loss = 0.0
         for k, v in losses.items():
