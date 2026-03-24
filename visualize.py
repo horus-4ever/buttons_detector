@@ -35,7 +35,7 @@ MATCH_COST_COORD = 5.0
 # Utilities
 # ------------------------------------------------------------
 def load_model(checkpoint_path: Path, num_classes: int, num_queries: int, device):
-    model = PRTR(num_classes=num_classes)
+    model = PRTR(num_classes=num_classes, num_queries=num_queries)
     ckpt = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
@@ -46,6 +46,10 @@ def load_model(checkpoint_path: Path, num_classes: int, num_queries: int, device
 def load_image_and_annotation(name: str):
     img_path = IMAGES_DIR / f"{name}.png"
     ann_path = ANNOTATIONS_DIR / f"{name}.json"
+
+    if Path(name).exists():
+        img_path = Path(name)
+        ann_path = Path(name.replace(".png", ".json"))
 
     image = Image.open(img_path).convert("RGB")
     with open(ann_path, "r", encoding="utf-8") as f:
@@ -254,6 +258,8 @@ def visualize_one(name: str):
         matches=matches
     )
 
+    if Path(name).exists():
+        name = Path(name).stem
     out_path = OUTPUT_DIR / f"{name}_viz.png"
     vis.save(out_path)
     print(f"Saved visualization to: {out_path}")
@@ -269,4 +275,5 @@ def visualize_random_sample():
 
 
 if __name__ == "__main__":
+    visualize_one(f"dataset/images/cloth_5_buttons_00000000.png")
     visualize_one(f"cloth_5_buttons_00000002")

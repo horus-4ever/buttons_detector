@@ -6,11 +6,81 @@ from math import exp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy.optimize import linear_sum_assignment
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
 from prtr import PRTR
+
+
+class RandomSafeErasing:
+    def __init__(
+            self,
+            to_avoid: list[tuple[int, int]],
+            p: float = 0.3,
+            min_width: float = 0.02, max_width: float = 0.5,
+            min_height: float = 0.02, max_height: float = 0.5,
+            safety_radius: float = 0.04,
+            max_trials: int = 20
+    ):
+        self.to_avoid = to_avoid
+        self.p = p
+        self.min_width = min_width
+        self.max_width = max_width
+        self.min_height = min_height
+        self.max_height = max_height
+        self.safety_radius = safety_radius
+        self.max_trials = max_trials
+
+    def _is_correct(self, x0, y0, x1, y1, W, H):
+        r_x = self.safety_radius * W
+        r_y = self.safety_radius * H
+        for bx, by in self.to_avoid:
+            px = bx * W
+            py = by * H
+            safe_x0 = px - r_x
+            safe_y0 = py - r_y
+            safe_x1 = px + r_x
+            safe_y1 = py + r_y
+
+            overlaps = not (
+                x1 < safe_x0 or
+                x0 > safe_x1 or
+                y1 < safe_y0 or
+                y0 > safe_y1
+            )
+            if overlaps:
+                return False
+        return True
+
+    
+    def __call__(self, image):
+        if random.random() > self.p:
+            return image
+        W, H = image.size
+        out = image.copy()
+        draw = ImageDraw.Draw(out)
+        how_much = random.randrange(2, 5)
+        done = 0
+        for _ in range(self.max_trials):
+            if done >= how_much:
+                break
+            width = random.uniform(self.min_width, self.max_width) * W
+            height = random.uniform(self.min_height, self.max_height) * H
+            random_x = random.randrange(0, W - int(width))
+            random_y = random.randrange(0, H - int(height))
+            # coordinates
+            x0 = random_x
+            y0 = random_y
+            x1 = random_x + width
+            y1 = random_y + height
+            if not self._is_correct(x0, y0, x1, y1, W, H):
+                continue
+            # else, remove the part
+            draw.rectangle([x0, y0, x1, y1], fill=(0, 0, 0))
+            done += 1
+        out.save("out.png")
+        return out
 
 
 class ButtonDataset(Dataset):
@@ -29,8 +99,10 @@ class ButtonDataset(Dataset):
         if len(self.ann_paths) == 0:
             raise RuntimeError(f"No JSON files found in {self.ann_dir}")
 
-        self.to_tensor = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
+    def transform_image(self, image, targets):
+        to_tensor = transforms.Compose([
+            RandomSafeErasing(targets),
+            transforms.Resize((self.image_size, self.image_size)),
             # data augmentation
             transforms.RandomGrayscale(p=0.1),
             transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
@@ -38,6 +110,7 @@ class ButtonDataset(Dataset):
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        return to_tensor(image)
 
     def __len__(self):
         return len(self.ann_paths)
@@ -57,9 +130,6 @@ class ButtonDataset(Dataset):
         img_path = self.images_dir / f"{name}.png"
         if not img_path.exists():
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
-        # open the corresponding image (RGB mode)
-        image = Image.open(img_path).convert("RGB")
-        image = self.to_tensor(image)  # [3, H, W], values in [0,1]
         # get the annotations
         buttons = ann.get("buttons", [])
         coords = []
@@ -73,6 +143,9 @@ class ButtonDataset(Dataset):
                 x = float(b["x_px"]) / float(width)
                 y = float(b["y_px"]) / float(height)
             coords.append([x, y])
+        # open the corresponding image (RGB mode)
+        image = Image.open(img_path).convert("RGB")
+        image = self.transform_image(image, coords)  # [3, H, W], values in [0,1]
         # this should not happen
         if len(coords) == 0:
             target_buttons = torch.zeros((0, 2), dtype=torch.float32)
