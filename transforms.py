@@ -76,6 +76,57 @@ class RandomSafeErasing(Transform):
         return out, to_avoid
 
 
+class RandomButtonErasing(Transform):
+    def __init__(
+        self,
+        p: float = 0.25,
+        min_size: float = 0.05,
+        max_size: float = 0.2
+    ):
+        self.p = p
+        self.min_size = min_size
+        self.max_size = max_size
+
+    def __call__(self, image, labels):
+        if random.random() > self.p or not labels:
+            return image, labels
+        W, H = image.size
+        randomly_choosen = random.choice(labels)
+        x, y = randomly_choosen
+        # then define the rectangle around that area
+        width = random.uniform(self.min_size, self.max_size) * W
+        height = random.uniform(self.min_size, self.max_size) * H
+        center_x = x * W
+        center_y = y * H
+        rectangle = [center_x - width // 2, center_y - height // 2, center_x + width // 2, center_y + height // 2]
+        # then draw the recangle
+        out = image.copy()
+        draw = ImageDraw.Draw(out)
+        draw.rectangle(rectangle, fill=(0, 0, 0))
+        # then update the labels
+        new_labels = []
+        for (x, y) in labels:
+            point = (x * W, y * H)
+            if rect_contains_point(point, rectangle):
+                continue
+            new_labels.append((x, y))
+        return out, new_labels
+
+
+def rect_contains_point(point, rect):
+    px, py = point
+    x1, y1, x2, y2 = rect
+    
+    if x1 > x2:
+        x1, x2 = x2, x1
+    if y1 > y2:
+        y1, y2 = y2, y1
+    if (x1 <= px <= x2) and (y1 <= py <= y2):
+        return True
+    else:
+        return False
+
+
 class ComposeWithLabels(Transform):
     def __init__(self, transformations):
         self.transformations = transformations
@@ -125,16 +176,38 @@ class RandomHorizontalTranslation(Transform):
         new_labels = []
         for (x, y) in labels:
             new_x = x + shift
-            if x < 0.0 or x > 1.0:
+            if new_x < 0.0 or new_x > 1.0:
                 continue
             new_labels.append((new_x, y))
+        return translated, new_labels
+
+
+class RandomVerticalTranslation(Transform):
+    def __init__(self, p: float = 0.5, min: float = -0.3, max: float = 0.3):
+        self.p = p
+        self.min = min
+        self.max = max
+
+    def __call__(self, image, labels):
+        if random.random() >= self.p:
+            return image, labels
+        W, H = image.size
+        shift = random.uniform(self.min, self.max)
+        translated = Image.new(image.mode, (W, H))
+        translated.paste(image, (0, int(shift * H)))
+        new_labels = []
+        for (x, y) in labels:
+            new_y = y + shift
+            if new_y < 0.0 or new_y > 1.0:
+                continue
+            new_labels.append((x, new_y))
         return translated, new_labels
 
 
 class SaveImage(Transform):
     def __call__(self, input, labels):
         result = super().__call__(input, labels)
-        input.save("out.png")
+        input.save(f"tests/{random.randrange(500)}.png")
         return result
 
 
