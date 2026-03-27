@@ -12,9 +12,9 @@ class Transform(ABC):
 class RandomSafeErasing(Transform):
     def __init__(
             self,
-            p: float = 0.3,
-            min_width: float = 0.02, max_width: float = 0.5,
-            min_height: float = 0.02, max_height: float = 0.5,
+            p: float = 0.2,
+            min_width: float = 0.02, max_width: float = 0.2,
+            min_height: float = 0.02, max_height: float = 0.2,
             safety_radius: float = 0.04,
             max_trials: int = 20
     ):
@@ -54,7 +54,7 @@ class RandomSafeErasing(Transform):
         W, H = image.size
         out = image.copy()
         draw = ImageDraw.Draw(out)
-        how_much = random.randrange(2, 5)
+        how_much = random.randrange(1, 3)
         done = 0
         for _ in range(self.max_trials):
             if done >= how_much:
@@ -136,3 +136,56 @@ class SaveImage(Transform):
         result = super().__call__(input, labels)
         input.save("out.png")
         return result
+
+
+class RandomSafeCrop(Transform):
+    def __init__(
+            self,
+            p: float = 0.4,
+            min_width: float = 0.7,
+            max_width: float = 1.0,
+            min_height: float = 0.7,
+            max_height: float = 1.0
+    ):
+        self.p = p
+        self.min_width = min_width
+        self.max_width = max_width
+        self.min_height = min_height
+        self.max_height = max_height
+
+    def __call__(self, image, labels):
+        if random.random() >= self.p:
+            return image, labels
+
+        W, H = image.size
+
+        crop_w = int(random.uniform(self.min_width, self.max_width) * W)
+        crop_h = int(random.uniform(self.min_height, self.max_height) * H)
+
+        crop_w = max(1, min(crop_w, W))
+        crop_h = max(1, min(crop_h, H))
+
+        if crop_w == W and crop_h == H:
+            return image, labels
+
+        left = random.randint(0, W - crop_w)
+        top = random.randint(0, H - crop_h)
+        right = left + crop_w
+        bottom = top + crop_h
+
+        cropped = image.crop((left, top, right, bottom))
+
+        new_labels = []
+        for (x, y) in labels:
+            px = x * W
+            py = y * H
+
+            new_x = (px - left) / crop_w
+            new_y = (py - top) / crop_h
+
+            if new_x < 0.0 or new_x > 1.0 or new_y < 0.0 or new_y > 1.0:
+                continue
+
+            new_labels.append((new_x, new_y))
+
+        return cropped, new_labels

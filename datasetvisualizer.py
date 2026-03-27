@@ -12,7 +12,7 @@ def get_data(path: Path):
             data = json.load(file)
             for button in data["buttons"]:
                 x_coords.append(button["x_ndc"])
-                y_coords.append(1 - button["y_ndc"]) # blender coordinates
+                y_coords.append(button["y_ndc"])
     return x_coords, y_coords
 
 

@@ -32,6 +32,7 @@ class ButtonDataset(Dataset):
 
     def transform_image(self, image, labels):
         to_tensor = ComposeWithLabels([
+            RandomSafeCrop(),
             RandomHorizontalFlip(),
             RandomHorizontalTranslation(),
             RandomSafeErasing(),
