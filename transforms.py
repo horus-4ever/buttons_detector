@@ -229,36 +229,62 @@ class RandomSafeCrop(Transform):
     def __call__(self, image, labels):
         if random.random() >= self.p:
             return image, labels
-
         W, H = image.size
-
         crop_w = int(random.uniform(self.min_width, self.max_width) * W)
         crop_h = int(random.uniform(self.min_height, self.max_height) * H)
-
         crop_w = max(1, min(crop_w, W))
         crop_h = max(1, min(crop_h, H))
-
         if crop_w == W and crop_h == H:
             return image, labels
-
         left = random.randint(0, W - crop_w)
         top = random.randint(0, H - crop_h)
         right = left + crop_w
         bottom = top + crop_h
-
         cropped = image.crop((left, top, right, bottom))
-
         new_labels = []
         for (x, y) in labels:
             px = x * W
             py = y * H
-
             new_x = (px - left) / crop_w
             new_y = (py - top) / crop_h
-
             if new_x < 0.0 or new_x > 1.0 or new_y < 0.0 or new_y > 1.0:
                 continue
-
             new_labels.append((new_x, new_y))
-
         return cropped, new_labels
+    
+
+class RandomZoomOut(Transform):
+    def __init__(
+            self,
+            p: float = 0.5,
+            min_scale: float = 0.7,
+            max_scale: float = 1.0,
+    ):
+        self.p = p
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+
+    def __call__(self, image, labels):
+        if random.random() >= self.p:
+            return image, labels
+        W, H = image.size
+        scale = random.uniform(self.min_scale, self.max_scale)
+        new_W = max(1, int(scale * W))
+        new_H = max(1, int(scale * H))
+        if new_W == W and new_H == H:
+            return image, labels
+        fill_grey_scale = random.randint(0, 80)
+        fill = (fill_grey_scale, fill_grey_scale, fill_grey_scale)
+        resized = image.resize((new_W, new_H), Image.BILINEAR)
+        canvas = Image.new(image.mode, (W, H), fill)
+        offset_x = random.randint(0, W - new_W)
+        offset_y = random.randint(0, H - new_H)
+        canvas.paste(resized, (offset_x, offset_y))
+        new_labels = []
+        for (x, y) in labels:
+            px = x * new_W + offset_x
+            py = y * new_H + offset_y
+            new_x = px / W
+            new_y = py / H
+            new_labels.append((new_x, new_y))
+        return canvas, new_labels
