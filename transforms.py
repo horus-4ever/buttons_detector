@@ -99,10 +99,13 @@ class RandomButtonErasing(Transform):
         center_x = x * W
         center_y = y * H
         rectangle = [center_x - width // 2, center_y - height // 2, center_x + width // 2, center_y + height // 2]
+        # define the fill color
+        v = random.randint(0, 160)
+        fill = (v, v, v)
         # then draw the recangle
         out = image.copy()
         draw = ImageDraw.Draw(out)
-        draw.rectangle(rectangle, fill=(0, 0, 0))
+        draw.rectangle(rectangle, fill=fill)
         # then update the labels
         new_labels = []
         for (x, y) in labels:
