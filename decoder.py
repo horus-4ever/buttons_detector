@@ -30,9 +30,16 @@ class Decoder(nn.Module):
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor]):
+        B, num_queries, _ = input.shape
         output = input
+        self.attn_maps = []
         for layer in self.layers:
-            output = layer(output, memory, pos, queries_pos)
+            output, weights = layer(output, memory, pos, queries_pos)
+            # attn = weights[0][0]
+            # memory_attention_weights (average=False) --> [B, num_queries, source_size]
+            # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
+            queries_attn_maps = [weights[0][i].reshape(16, 16) for i in range(num_queries)]
+            self.attn_maps.append(queries_attn_maps)
         # normalize and return
         output = self.norm(output)
         return output
@@ -49,6 +56,7 @@ class DecoderLayer(nn.Module):
     ):
         super().__init__()
         # multihead self-attention layers
+        # batch first --> [B, num_queries, C]
         self.queries_attention = nn.MultiheadAttention(
             embed_dim=d_model,
             num_heads=nheads,
@@ -75,6 +83,7 @@ class DecoderLayer(nn.Module):
         return tensor if pos is None else tensor + pos
 
     def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor]):
+        # # INPUT SHAPE: [B, num_queries, C]
         # computes k and q for queries attention
         k_queries = q_queries = self.with_pos_embed(input, queries_pos)
         # compute self-attention on queries and dropout
@@ -88,8 +97,10 @@ class DecoderLayer(nn.Module):
         k_memory = self.with_pos_embed(memory, pos)
         q_memory = self.with_pos_embed(add_norm_out, queries_pos)
         # compute self-attention
-        memory_attention_out = self.memory_attention(q_memory, k_memory, v_memory)[0]
+        memory_attention_out, memory_attention_weights = self.memory_attention(q_memory, k_memory, v_memory, need_weights=True, average_attn_weights=True)
         memory_attention_out = self.dropout2(memory_attention_out)
+        # memory_attention_weights (average=False) --> [B, num_queries, source_size]
+        # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
         # add and normalize
         add_norm_out = add_norm_out + memory_attention_out
         add_norm_out = self.norm2(add_norm_out)
@@ -99,4 +110,4 @@ class DecoderLayer(nn.Module):
         # add and normalize
         result = add_norm_out + ffn_out
         result = self.norm3(result)
-        return result
+        return result, memory_attention_weights

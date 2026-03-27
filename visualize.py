@@ -5,6 +5,8 @@ import torch
 from PIL import Image, ImageDraw
 from scipy.optimize import linear_sum_assignment
 from torchvision import transforms
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
 from prtr import PRTR
 
@@ -16,7 +18,7 @@ DATASET_ROOT = Path("dataset")
 IMAGES_DIR = DATASET_ROOT / "images"
 ANNOTATIONS_DIR = DATASET_ROOT / "annotations"
 
-CHECKPOINT_PATH = Path("checkpoints/best.pt")
+CHECKPOINT_PATH = Path("good_runs")
 OUTPUT_DIR = Path("viz_outputs")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -215,8 +217,27 @@ def run_inference(model, image: Image.Image, device, conf_threshold=0.7):
     return kept_logits, kept_buttons, kept_scores
 
 
-def visualize_one(name: str):
-    model = load_model(CHECKPOINT_PATH, NUM_CLASSES, NUM_QUERIES, DEVICE)
+def visualize_attention(image, model, name, show: bool = True):
+    """Visualize the attention maps after the model has been ran"""
+    # attn_map: [H, W]
+    size = (512, 512)
+    attn_maps = model.transformer.decoder.attn_maps[-1] # get last layer attention maps
+    figure, axes = plt.subplots(len(attn_maps) // 5, 5, figsize=(19.20,9.83))
+    figure.suptitle("Attention queries", fontsize=48)
+    for i, attn_map in enumerate(attn_maps):
+        attn_map = attn_map.unsqueeze(0).unsqueeze(0)   # [1,1,H,W]
+        attn_map = F.interpolate(attn_map, size=size, mode="bilinear", align_corners=False)
+        attn_map = attn_map[0, 0].detach().cpu().numpy()
+        x, y = i // 5, i % 5
+        axes[x, y].imshow(image.resize(size))
+        axes[x, y].imshow(attn_map, cmap="jet", alpha=0.3)
+        axes[x, y].set_title(f"Attention of query {i}")
+    figure.savefig(OUTPUT_DIR / f"{name}_viz_attention.png")
+
+
+def visualize_one(name: str, model_name: str, save_attention_maps: bool = True, show_attention_map: bool = True):
+    model_path = CHECKPOINT_PATH / model_name
+    model = load_model(model_path, NUM_CLASSES, NUM_QUERIES, DEVICE)
 
     image, ann = load_image_and_annotation(name)
     width, height = image.size
@@ -264,6 +285,10 @@ def visualize_one(name: str):
     vis.save(out_path)
     print(f"Saved visualization to: {out_path}")
 
+    if save_attention_maps:
+        visualize_attention(image, model, name, show_attention_map)
+        print(f"Saved attention map to: {out_path}")
+
 
 def visualize_random_sample():
     ann_files = sorted(ANNOTATIONS_DIR.glob("*.json"))
@@ -271,9 +296,19 @@ def visualize_random_sample():
         raise RuntimeError("No annotation files found")
 
     name = ann_files[0].stem
-    visualize_one(name)
+    # visualize_one(name)
 
 
 if __name__ == "__main__":
-    visualize_one(f"dataset/images/cloth_5_buttons_00000000.png")
-    visualize_one(f"cloth_5_buttons_00000002")
+    import argparse
+    parser = argparse.ArgumentParser(description="Exemple de script avec un paramètre de modèle.")
+    parser.add_argument("-m", "--model", type=str, help="Le nom du modèle à utiliser")
+    args = parser.parse_args()
+    model_name = args.model or "good_run_8.pt"
+    # visualize_one(f"cloth_no_buttons_00000006", show_attention_map=False)
+    # visualize_one(f"cloth_7_buttons_00000006", show_attention_map=False)
+    # visualize_one(f"cloth_5_buttons_fastened_00000007", show_attention_map=False)
+    # visualize_one(f"cloth_5_buttons_00000005", show_attention_map=False)
+    path = Path("dataset/real")
+    for path in path.glob("*.png"):
+        visualize_one(str(path), model_name, show_attention_map=False)

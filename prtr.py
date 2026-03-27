@@ -19,8 +19,8 @@ class PRTR(nn.Module):
         self.transformer = Transformer(
             d_model=self.d_model,
             nheads=4,
-            encoder_nlayers=1,
-            decoder_nlayers=5,
+            encoder_nlayers=3,
+            decoder_nlayers=1,
             dim_ffn=512,
             dropout=0.1,
             activation="relu"
@@ -29,7 +29,6 @@ class PRTR(nn.Module):
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         self.button_head = MLP(self.d_model, self.d_model, 2, num_layers=3)
-        self.holes_head = MLP(self.d_model, self.d_model, 2, num_layers=3)
         
 
     def forward(self, inputs):
