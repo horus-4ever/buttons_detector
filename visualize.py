@@ -8,7 +8,7 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
-from prtr import PRTR
+from prtr import PRTR, build_model_from
 
 
 # ------------------------------------------------------------
@@ -36,9 +36,9 @@ MATCH_COST_COORD = 5.0
 # ------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------
-def load_model(checkpoint_path: Path, num_classes: int, num_queries: int, device):
-    model = PRTR(num_classes=num_classes, num_queries=num_queries)
-    ckpt = torch.load(checkpoint_path, map_location=device)
+def load_model(model_config: str, model_weights_path: str, device):
+    model = build_model_from(model_config)
+    ckpt = torch.load(model_weights_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()
@@ -235,10 +235,7 @@ def visualize_attention(image, model, name, show: bool = True):
     figure.savefig(OUTPUT_DIR / f"{name}_viz_attention.png")
 
 
-def visualize_one(name: str, model_name: str, save_attention_maps: bool = True, show_attention_map: bool = True):
-    model_path = CHECKPOINT_PATH / model_name
-    model = load_model(model_path, NUM_CLASSES, NUM_QUERIES, DEVICE)
-
+def visualize_one(name: str, model, save_attention_maps: bool = True, show_attention_map: bool = True):
     image, ann = load_image_and_annotation(name)
     width, height = image.size
 
@@ -304,11 +301,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Exemple de script avec un paramètre de modèle.")
     parser.add_argument("-m", "--model", type=str, help="Le nom du modèle à utiliser")
     args = parser.parse_args()
-    model_name = args.model or "good_run_8.pt"
+    model_name = args.model or "good_run_8"
+    model_path = CHECKPOINT_PATH / f"{model_name}.json"
+    model_weights_path = CHECKPOINT_PATH / f"{model_name}.pt"
+    # load the model from the name
+    model = load_model(str(model_path), str(model_weights_path), DEVICE)
     # visualize_one(f"cloth_no_buttons_00000006", show_attention_map=False)
     # visualize_one(f"cloth_7_buttons_00000006", show_attention_map=False)
     # visualize_one(f"cloth_5_buttons_fastened_00000007", show_attention_map=False)
     # visualize_one(f"cloth_5_buttons_00000005", show_attention_map=False)
     path = Path("dataset/real")
     for path in path.glob("*.png"):
-        visualize_one(str(path), model_name, show_attention_map=False)
+        visualize_one(str(path), model, show_attention_map=False)

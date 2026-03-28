@@ -41,7 +41,6 @@ class ButtonDataset(Dataset):
             ComposeWrapper(transforms.Resize((self.image_size, self.image_size))),
             ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
             ComposeWrapper(transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))),
-            SaveImage(),
             # to tensor and normalize
             ComposeWrapper(transforms.ToTensor()),
             ComposeWrapper(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
@@ -326,23 +325,24 @@ def evaluate(model, criterion, dataloader, device):
 
 
 
-def main(resume_from_best=False):
+def main(model_config):
     # configuration
     dataset_root = "dataset"
-    batch_size = 2
-    num_epochs = 50
-    lr = 1e-4
-    weight_decay = 1e-4
-    train_split = 0.9
-    num_workers = 4
-    seed = 42
-    # task-specific configuration
-    num_classes = 1
-    num_queries = 10
+    training_parameters = model_config["training_parameters"]
+    model_parameters = model_config["parameters"]
+    model_name = model_config["model_name"]
+    batch_size = training_parameters["batch_size"]
+    num_epochs = training_parameters["num_epochs"]
+    lr = training_parameters["lr"]
+    weight_decay = training_parameters["weight_decay"]
+    train_split = training_parameters["train_split"]
+    num_workers = training_parameters["num_workers"]
+    seed = training_parameters["seed"]
     # use the GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
+    # sets the seed
     random.seed(seed)
     torch.manual_seed(seed)
 
@@ -377,7 +377,7 @@ def main(resume_from_best=False):
     )
 
     # create the model
-    model = PRTR(num_classes=num_classes, num_queries=num_queries)
+    model = PRTR(model_name, **model_parameters)
     model = model.to(device)
     # display the number of parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -388,7 +388,7 @@ def main(resume_from_best=False):
     # create the loss calculator
     matcher = HungarianMatcher(cost_class=1.0, cost_coord=5.0)
     criterion = SetCriterion(
-        num_classes=num_classes,
+        num_classes=model_parameters["num_classes"],
         matcher=matcher,
         weight_dict={
             "loss_ce": 1.0,
@@ -408,31 +408,8 @@ def main(resume_from_best=False):
     start_epoch = 0
     best_val_loss = float("inf")
 
-    best_ckpt_path = Path("checkpoints") / "best.pt"
-
-    if resume_from_best and best_ckpt_path.exists():
-        print(f"Loading checkpoint from {best_ckpt_path}")
-
-        checkpoint = torch.load(best_ckpt_path, map_location=device)
-
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-
-        start_epoch = checkpoint["epoch"]
-        best_val_loss = checkpoint["val_loss"]
-
-        # IMPORTANT: move optimizer tensors to correct device
-        for state in optimizer.state.values():
-            for k, v in state.items():
-                if torch.is_tensor(v):
-                    state[k] = v.to(device)
-        
-        if "scheduler_state_dict" in checkpoint:
-            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-
-        print(f"Resumed from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
-
     # TRAINING LOOP
+    print(f"# TRAIN model '{model.name}'")
     best_val_loss = float("inf")
     save_dir = Path("checkpoints")
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -482,4 +459,8 @@ if __name__ == "__main__":
     parser.add_argument("--resume", choices=["none", "best", "last"], default="none")
     args = parser.parse_args()
     resume = args.resume == "best"
-    main(resume)
+    # configuration
+    config_path = Path("model.json")
+    with open(config_path, "r") as file:
+        model_config = json.load(file)
+    main(model_config)

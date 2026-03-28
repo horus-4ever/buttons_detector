@@ -1,0 +1,25 @@
+{
+    "model_name": "PRTR_data_aug_geometric",
+    "parameters": {
+        "num_classes": 1,
+        "num_queries": 10,
+        "d_model": 128,
+        "n_heads": 4,
+        "n_encoder_layers": 3,
+        "n_decoder_layers": 1,
+        "dim_ffn": 512,
+        "dropout": 0.1,
+        "activation": "relu",
+        "mlp_hidden_dim": 128,
+        "mlp_num_layers": 3
+    },
+    "training_parameters": {
+        "batch_size": 2,
+        "num_epochs": 50,
+        "lr": 1e-4,
+        "weight_decay": 1e-4,
+        "train_split": 0.9,
+        "num_workers": 4,
+        "seed": 42
+    }
+}
