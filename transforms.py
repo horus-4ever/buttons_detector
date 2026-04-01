@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import random
+import math
 from PIL import Image, ImageDraw
 
 
@@ -209,9 +210,72 @@ class RandomVerticalTranslation(Transform):
 
 class SaveImage(Transform):
     def __call__(self, input, labels):
-        result = super().__call__(input, labels)
-        input.save(f"tests/{random.randrange(500)}.png")
-        return result
+        image, labels = super().__call__(input, labels)
+        out = image.copy()
+        draw = ImageDraw.Draw(out)
+        W, H = out.size
+        radius = 4
+        for i, (x, y) in enumerate(labels):
+            px = x * W
+            py = y * H
+            # draw a small circle
+            draw.ellipse(
+                (px - radius, py - radius, px + radius, py + radius),
+                fill=(255, 0, 0),
+                outline=(255, 255, 255)
+            )
+            # optional: draw the label index next to it
+            draw.text((px + 6, py - 6), str(i), fill=(255, 0, 0))
+        out.save(f"tests/{random.randrange(500)}.png")
+        return image, labels
+    
+class RandomRotation(Transform):
+    def __init__(
+        self,
+        p: float = 0.5,
+        min_angle: float = -90.0,
+        max_angle: float = 90.0,
+        fill=(0, 0, 0)
+    ):
+        self.p = p
+        self.min_angle = min_angle
+        self.max_angle = max_angle
+        self.fill = fill
+
+    def __call__(self, image, labels):
+        if random.random() >= self.p:
+            return image, labels
+        W, H = image.size
+        angle = random.uniform(self.min_angle, self.max_angle)
+        # rotate image around center, keep same canvas size
+        rotated = image.rotate(
+            angle,
+            resample=Image.BILINEAR,
+            expand=False,
+            fillcolor=self.fill
+        )
+        # rotate labels around image center
+        cx = W / 2.0
+        cy = H / 2.0
+        theta = -angle * 3.141592653589793 / 180.0
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+
+        new_labels = []
+        for x, y in labels:
+            px = x * W
+            py = y * H
+            dx = px - cx
+            dy = py - cy
+            new_dx = dx * cos_t - dy * sin_t
+            new_dy = dx * sin_t + dy * cos_t
+            new_px = cx + new_dx
+            new_py = cy + new_dy
+            new_x = new_px / W
+            new_y = new_py / H
+            if 0.0 <= new_x <= 1.0 and 0.0 <= new_y <= 1.0:
+                new_labels.append((new_x, new_y))
+        return rotated, new_labels
 
 
 class RandomSafeCrop(Transform):

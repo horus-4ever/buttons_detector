@@ -35,10 +35,12 @@ class ButtonDataset(Dataset):
             # data augmentation
             RandomZoomOut(),
             RandomButtonErasing(),
+            RandomRotation(),
             RandomSafeCrop(),
             RandomHorizontalFlip(),
             RandomHorizontalTranslation(),
             ComposeWrapper(transforms.Resize((self.image_size, self.image_size))),
+            SaveImage(),
             ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
             ComposeWrapper(transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))),
             # to tensor and normalize
@@ -325,7 +327,7 @@ def evaluate(model, criterion, dataloader, device):
 
 
 
-def main(model_config):
+def main(model_config, resume_epoch=None):
     # configuration
     dataset_root = "dataset"
     training_parameters = model_config["training_parameters"]
@@ -407,13 +409,28 @@ def main(model_config):
 
     start_epoch = 0
     best_val_loss = float("inf")
-
-    # TRAINING LOOP
-    print(f"# TRAIN model '{model.name}'")
-    best_val_loss = float("inf")
     save_dir = Path("checkpoints")
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    if resume_epoch is not None:
+        checkpoint_path = save_dir / "last.pt"
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        saved_epoch = checkpoint.get("epoch", None)
+        if saved_epoch is None:
+            raise RuntimeError("The checkpoint does not contain an 'epoch' field.")
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        best_val_loss = checkpoint.get("val_loss", float("inf"))
+        start_epoch = resume_epoch
+        print(f"# Resumed from last checkpoint")
+        print(f"# Checkpoint epoch: {saved_epoch}")
+        print(f"# Continuing training from epoch {start_epoch + 1}")
+
+    # TRAINING LOOP
+    print(f"# TRAIN model '{model.name}'")
     for epoch in range(start_epoch, start_epoch + num_epochs):
         train_stats = train_one_epoch(model, criterion, train_loader, optimizer, device)
         val_stats = evaluate(model, criterion, val_loader, device)
@@ -454,13 +471,11 @@ def main(model_config):
 
 if __name__ == "__main__":
     import argparse
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", choices=["none", "best", "last"], default="none")
+    parser.add_argument("--resume", type=int, default=None)
     args = parser.parse_args()
-    resume = args.resume == "best"
     # configuration
     config_path = Path("model.json")
     with open(config_path, "r") as file:
         model_config = json.load(file)
-    main(model_config)
+    main(model_config, resume_epoch=args.resume)
