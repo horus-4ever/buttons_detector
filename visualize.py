@@ -304,6 +304,8 @@ if __name__ == "__main__":
     model_name = args.model or "good_run_8"
     model_path = CHECKPOINT_PATH / f"{model_name}.json"
     model_weights_path = CHECKPOINT_PATH / f"{model_name}.pt"
+    # model_path = Path(f"good_runs/good_run_8.json")
+    # model_weights_path = Path("checkpoints_finetune") / f"{model_name}.pt"
     # load the model from the name
     model = load_model(str(model_path), str(model_weights_path), DEVICE)
     # visualize_one(f"cloth_no_buttons_00000006", show_attention_map=False)

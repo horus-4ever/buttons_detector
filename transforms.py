@@ -1,10 +1,17 @@
 from abc import ABC, abstractmethod
 import random
 import math
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
+import numpy as np
 
 
 class Transform(ABC):
+    def __init__(self):
+        self.current_epoch = 0
+
+    def set_epoch(self, epoch: int):
+        self.current_epoch = max(0, epoch)
+
     @abstractmethod
     def __call__(self, input, labels):
         return input, labels
@@ -355,3 +362,183 @@ class RandomZoomOut(Transform):
             new_y = py / H
             new_labels.append((new_x, new_y))
         return canvas, new_labels
+
+
+class RandomProgressiveFoveatedBlur(Transform):
+    """
+    Blur is strongest far from the labels and weakest near them.
+
+    Labels are expected to be:
+        [(x1, y1), (x2, y2), ...]
+    with x, y normalized in [0, 1].
+
+    Progressive behavior:
+    - call set_epoch(epoch) from your training loop
+    - the maximum blur radius will decrease over time
+    """
+
+    def __init__(
+        self,
+        p: float = 0.3,
+        initial_max_blur_radius: float = 15.0,
+        final_max_blur_radius: float = 0.0,
+        blur_levels: int = 6,
+        keep_radius: float = 0.015,
+        fade_radius: float = 0.12,
+        center_jitter: float = 0.0,
+        total_decay_epochs: int = 20,
+        decay_every: int = 1,
+        schedule: str = "cosine",   # "linear" or "cosine"
+        blur_mode: str = "box",     # "box" or "gaussian"
+        smoothstep: bool = True
+    ):
+        self.p = p
+        self.initial_max_blur_radius = initial_max_blur_radius
+        self.final_max_blur_radius = final_max_blur_radius
+        self.blur_levels = max(2, blur_levels)
+        self.keep_radius = keep_radius
+        self.fade_radius = fade_radius
+        self.center_jitter = center_jitter
+        self.total_decay_epochs = max(1, total_decay_epochs)
+        self.decay_every = max(1, decay_every)
+        self.schedule = schedule
+        self.blur_mode = blur_mode
+        self.smoothstep = smoothstep
+
+        self.current_epoch = 0
+
+        if self.fade_radius < self.keep_radius:
+            raise ValueError("fade_radius must be >= keep_radius")
+
+    def _get_progress(self):
+        effective_epoch = (self.current_epoch // self.decay_every) * self.decay_every
+        t = effective_epoch / float(self.total_decay_epochs)
+        if t < 0.0:
+            t = 0.0
+        if t > 1.0:
+            t = 1.0
+        return t
+
+    def _get_current_max_blur_radius(self):
+        t = self._get_progress()
+
+        if self.schedule == "linear":
+            factor = 1.0 - t
+        elif self.schedule == "cosine":
+            factor = 0.5 * (1.0 + math.cos(math.pi * t))
+        else:
+            raise ValueError(f"Unknown schedule: {self.schedule}")
+
+        return (
+            self.final_max_blur_radius
+            + (self.initial_max_blur_radius - self.final_max_blur_radius) * factor
+        )
+
+    def _blur(self, image, radius):
+        if radius <= 0.0:
+            return image.copy()
+        if self.blur_mode == "box":
+            return image.filter(ImageFilter.BoxBlur(radius))
+        elif self.blur_mode == "gaussian":
+            return image.filter(ImageFilter.GaussianBlur(radius))
+        else:
+            raise ValueError(f"Unknown blur_mode: {self.blur_mode}")
+
+    def _build_blur_stack(self, image, current_max_blur_radius):
+        radii = []
+        blurred_arrays = []
+
+        for i in range(self.blur_levels):
+            if self.blur_levels == 1:
+                t = 0.0
+            else:
+                t = i / float(self.blur_levels - 1)
+            radius = current_max_blur_radius * t
+
+            # avoid recomputing nearly identical blur values
+            radius_key = round(radius, 3)
+            if len(radii) > 0 and abs(radius_key - radii[-1]) < 1e-6:
+                blurred_arrays.append(blurred_arrays[-1])
+                continue
+
+            blurred = self._blur(image, radius)
+            arr = np.asarray(blurred).astype(np.float32)
+            radii.append(radius_key)
+            blurred_arrays.append(arr)
+
+        stack = np.stack(blurred_arrays, axis=0)  # [L, H, W, C] or [L, H, W]
+        return stack
+
+    def _compute_distance_map(self, W, H, labels):
+        xs = np.arange(W, dtype=np.float32)[None, :]
+        ys = np.arange(H, dtype=np.float32)[:, None]
+
+        min_dist_sq = np.full((H, W), np.inf, dtype=np.float32)
+
+        for (x, y) in labels:
+            jitter_x = random.uniform(-self.center_jitter, self.center_jitter)
+            jitter_y = random.uniform(-self.center_jitter, self.center_jitter)
+
+            x = min(1.0, max(0.0, x + jitter_x))
+            y = min(1.0, max(0.0, y + jitter_y))
+
+            px = x * (W - 1)
+            py = y * (H - 1)
+
+            dist_sq = (xs - px) ** 2 + (ys - py) ** 2
+            min_dist_sq = np.minimum(min_dist_sq, dist_sq)
+
+        return np.sqrt(min_dist_sq)
+
+    def _compute_blend_position_map(self, distance_map, W, H):
+        base = float(min(W, H))
+        keep_px = self.keep_radius * base
+        fade_px = self.fade_radius * base
+
+        if fade_px <= keep_px:
+            fade_px = keep_px + 1.0
+
+        t = (distance_map - keep_px) / (fade_px - keep_px)
+        t = np.clip(t, 0.0, 1.0)
+
+        if self.smoothstep:
+            t = t * t * (3.0 - 2.0 * t)
+
+        return t * float(self.blur_levels - 1)
+
+    def __call__(self, image, labels):
+        if random.random() > self.p:
+            return image, labels
+        if not labels:
+            return image, labels
+
+        W, H = image.size
+        current_max_blur_radius = self._get_current_max_blur_radius()
+
+        if current_max_blur_radius <= 0.0:
+            return image, labels
+
+        blur_stack = self._build_blur_stack(image, current_max_blur_radius)
+        distance_map = self._compute_distance_map(W, H, labels)
+        level_map = self._compute_blend_position_map(distance_map, W, H)
+
+        level0 = np.floor(level_map).astype(np.int32)
+        level1 = np.clip(level0 + 1, 0, self.blur_levels - 1)
+        alpha = (level_map - level0).astype(np.float32)
+
+        yy, xx = np.indices((H, W))
+
+        if blur_stack.ndim == 4:
+            # RGB / multi-channel
+            pix0 = blur_stack[level0, yy, xx]   # [H, W, C]
+            pix1 = blur_stack[level1, yy, xx]   # [H, W, C]
+            out = pix0 * (1.0 - alpha[..., None]) + pix1 * alpha[..., None]
+            out = np.clip(out, 0, 255).astype(np.uint8)
+        else:
+            # grayscale
+            pix0 = blur_stack[level0, yy, xx]   # [H, W]
+            pix1 = blur_stack[level1, yy, xx]   # [H, W]
+            out = pix0 * (1.0 - alpha) + pix1 * alpha
+            out = np.clip(out, 0, 255).astype(np.uint8)
+
+        return Image.fromarray(out), labels
