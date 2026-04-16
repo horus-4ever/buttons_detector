@@ -380,6 +380,7 @@ class RandomProgressiveFoveatedBlur(Transform):
     def __init__(
         self,
         p: float = 0.3,
+        current_epoch: int = 0,
         initial_max_blur_radius: float = 15.0,
         final_max_blur_radius: float = 0.0,
         blur_levels: int = 6,
@@ -405,7 +406,7 @@ class RandomProgressiveFoveatedBlur(Transform):
         self.blur_mode = blur_mode
         self.smoothstep = smoothstep
 
-        self.current_epoch = 0
+        self.current_epoch = current_epoch
 
         if self.fade_radius < self.keep_radius:
             raise ValueError("fade_radius must be >= keep_radius")

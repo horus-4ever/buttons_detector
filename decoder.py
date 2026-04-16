@@ -29,7 +29,7 @@ class Decoder(nn.Module):
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor]):
+    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], att_map_size: tuple):
         B, num_queries, _ = input.shape
         output = input
         self.attn_maps = []
@@ -38,7 +38,8 @@ class Decoder(nn.Module):
             # attn = weights[0][0]
             # memory_attention_weights (average=False) --> [B, num_queries, source_size]
             # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
-            queries_attn_maps = [weights[0][i].reshape(16, 16) for i in range(num_queries)]
+            width, height = att_map_size
+            queries_attn_maps = [weights[0][i].reshape(height, width) for i in range(num_queries)]
             self.attn_maps.append(queries_attn_maps)
         # normalize and return
         output = self.norm(output)

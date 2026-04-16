@@ -1,9 +1,12 @@
 # dataset and chekpoints
 checkpoints/
+checkpoints_finetune/
 dataset/
+dataset_finetune/
 good_runs/
 viz_outputs/
 tests/
+model.json
 *.pth
 *.pt
 

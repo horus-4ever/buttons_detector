@@ -62,7 +62,7 @@ def load_image_and_annotation(name: str):
 
 def preprocess_image(image: Image.Image):
     tfm = transforms.Compose([
-        transforms.Resize((512, 512)),
+        transforms.Resize((768, 768)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])

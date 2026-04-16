@@ -40,7 +40,7 @@ class Transformer(nn.Module):
 
     def forward(self, src, query_embed, pos_embed):
         # flatten NxCxHxW to HWxNxC
-        bs, c, h, w = src.shape
+        bs, c, att_height, att_width = pos_embed.shape
         src = src.flatten(2).transpose(1, 2)          # [B, HW, C]
         pos_embed = pos_embed.flatten(2).transpose(1, 2)  # [B, HW, C]
         query_embed = query_embed.unsqueeze(0).repeat(bs, 1, 1)  # [B, num_queries, C]
@@ -49,5 +49,5 @@ class Transformer(nn.Module):
         # forward of encoder
         memory = self.encoder(src, pos=pos_embed)
         # forward of decoder
-        result = self.decoder(decoder_input, memory, pos=pos_embed, queries_pos=query_embed)
+        result = self.decoder(decoder_input, memory, pos=pos_embed, queries_pos=query_embed, att_map_size=(att_height, att_width))
         return result, memory

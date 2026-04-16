@@ -3,6 +3,7 @@ import random
 from pathlib import Path
 from typing import List, Dict, Tuple
 from math import exp
+from xml.parsers.expat import model
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,11 +21,10 @@ class ButtonDataset(Dataset):
     Images will be resized by the `image_size` parameter.
     """
 
-    def __init__(self, root: str, image_size: int = 512):
+    def __init__(self, root: str):
         self.root = Path(root)
         self.images_dir = self.root / "images"
         self.ann_dir = self.root / "annotations"
-        self.image_size = image_size
 
         self.ann_paths = sorted(self.ann_dir.glob("*.json"))
         # check if there are annotations
@@ -32,24 +32,9 @@ class ButtonDataset(Dataset):
             raise RuntimeError(f"No JSON files found in {self.ann_dir}")
 
     def transform_image(self, image, labels):
-        to_tensor = ComposeWithLabels([
-            # data augmentation
-            RandomZoomOut(),
-            RandomButtonErasing(),
-            RandomRotation(),
-            RandomSafeCrop(),
-            RandomHorizontalFlip(),
-            RandomHorizontalTranslation(),
-            ComposeWrapper(transforms.Resize((self.image_size, self.image_size))),
-            RandomProgressiveFoveatedBlur(p=1),
-            SaveImage(),
-            ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
-            ComposeWrapper(transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5))),
-            # to tensor and normalize
-            ComposeWrapper(transforms.ToTensor()),
-            ComposeWrapper(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
-        ])
-        return to_tensor(image, labels)
+        trainer = get_trainer() # type: ignore
+        to_tensor = trainer.transforms # type: ignore
+        return to_tensor(image, labels) # type: ignore
 
     def __len__(self):
         return len(self.ann_paths)
@@ -107,65 +92,132 @@ def collate_fn(batch):
     return images, list(targets)
 
 
-def train_one_epoch(model, criterion, dataloader, optimizer, device):
-    """
-    Train for one epoch, optimize, backpropagate and return the epoch's loss.
-    """
-    model.train()
-    criterion.train()
+class Trainer:
+    def __init__(self, model, criterion, optimizer, scheduler, device, dataloader, val_dataloader):
+        self.model = model
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.device = device
+        self.val_dataloader = val_dataloader
+        self.dataloader = dataloader
+        self.epoch = 0
+        self.best_val_loss = float("inf")
+        self.last_was_best = False
+        self._transforms = None
 
-    running = {
-        "loss": 0.0,
-        "loss_ce": 0.0,
-        "loss_button": 0.0,
-    }
+    def train_one_epoch(self):
+        self.model.train()
+        self.criterion.train()
+        running = {
+            "loss": 0.0,
+            "loss_ce": 0.0,
+            "loss_button": 0.0,
+        }
+        for images, targets in self.dataloader:
+            images = images.to(self.device)
+            targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
+            # forward into the model and comoute the loss
+            outputs = self.model(images)
+            losses = self.criterion(outputs, targets)
+            # backpropagate
+            self.optimizer.zero_grad()
+            losses["loss"].backward()
+            self.optimizer.step()
+            # compute the total loss of the epoch
+            for k in running:
+                running[k] += losses[k].item()
+        # return the mean of the loss for the epoch
+        n = len(self.dataloader)
+        return {k: v / n for k, v in running.items()}
+    
+    @torch.no_grad()
+    def evaluate(self):
+        self.model.eval()
+        self.criterion.eval()
+        # define the losses
+        running = {"loss": 0.0, "loss_ce": 0.0, "loss_button": 0.0}
+        for images, targets in self.val_dataloader:
+            images = images.to(self.device)
+            targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
+            outputs = self.model(images)
+            losses = self.criterion(outputs, targets)
+            for k in running:
+                running[k] += losses[k].item()
+        # compute the mean of the loss
+        n = len(self.val_dataloader)
+        return {k: v / n for k, v in running.items()}
+    
+    def step(self):
+        self._transforms = self._get_epoch_transforms()
+        train_stats = self.train_one_epoch()
+        val_stats = self.evaluate()
+        self.scheduler.step()
+        # update the metrics
+        if val_stats["loss"] < self.best_val_loss:
+            self.best_val_loss = val_stats["loss"]
+            self.last_was_best = True
+        else:
+            self.last_was_best = False
+        self.epoch += 1
+        return train_stats, val_stats
 
-    for images, targets in dataloader:
-        images = images.to(device)
-        targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
-        # forward into the model and comoute the loss
-        outputs = model(images)
-        losses = criterion(outputs, targets)
-        # backpropagate
-        optimizer.zero_grad()
-        losses["loss"].backward()
-        optimizer.step()
-        # compute the total loss of the epoch
-        for k in running:
-            running[k] += losses[k].item()
-    # return the mean of the loss for the epoch
-    n = len(dataloader)
-    return {k: v / n for k, v in running.items()}
+    def resume(self, checkpoint_path: Path):
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        saved_epoch = checkpoint.get("epoch", None)
+        if saved_epoch is None:
+            raise RuntimeError("The checkpoint does not contain an 'epoch' field.")
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        self.epoch = saved_epoch
+        self.best_val_loss = checkpoint.get("val_loss", float("inf"))
+    
+    def save_checkpoint(self, save_path: Path):
+        torch.save(
+            {
+                "epoch": self.epoch,
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "scheduler_state_dict": self.scheduler.state_dict(),
+                "val_loss": self.best_val_loss,
+            },
+            save_path
+        )
+
+    @property
+    def transforms(self):
+        return self._transforms
+
+    def _get_epoch_transforms(self) -> ComposeWithLabels:
+        image_sizes = [512, 640, 768, 896]
+        image_size = random.choice(image_sizes)
+        return ComposeWithLabels([
+            ComposeWrapper(transforms.Resize((image_size, image_size))),
+            RandomSafeErasing(p=0.6),
+            # RandomButtonErasing(p=0.2),
+            RandomHorizontalFlip(),
+            RandomHorizontalTranslation(p=0.5, min=-0.3, max=0.3),
+            RandomVerticalTranslation(p=0.5, min=-0.3, max=0.3),
+            RandomRotation(p=0.5, min_angle=-45, max_angle=45),
+            ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
+            RandomProgressiveFoveatedBlur(p=0.5, current_epoch=self.epoch),
+            ComposeWrapper(transforms.ToTensor()),
+            ComposeWrapper(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+        ])
 
 
-@torch.no_grad()
-def evaluate(model, criterion, dataloader, device):
-    model.eval()
-    criterion.eval()
+_trainer = None
 
-    running = {
-        "loss": 0.0,
-        "loss_ce": 0.0,
-        "loss_button": 0.0,
-    }
+def get_trainer():
+    global _trainer
+    if _trainer is not None:
+        return _trainer
 
-    for images, targets in dataloader:
-        images = images.to(device)
-        targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
-
-        outputs = model(images)
-        losses = criterion(outputs, targets)
-
-        for k in running:
-            running[k] += losses[k].item()
-
-    n = len(dataloader)
-    return {k: v / n for k, v in running.items()}
-
-
-
-
-def main(model_config, resume_epoch=None):
+def init_trainer(model_config):
+    global _trainer
     # configuration
     dataset_root = "dataset"
     training_parameters = model_config["training_parameters"]
@@ -178,6 +230,8 @@ def main(model_config, resume_epoch=None):
     train_split = training_parameters["train_split"]
     num_workers = training_parameters["num_workers"]
     seed = training_parameters["seed"]
+    cost_class = training_parameters["cost_class"]
+    cost_coord = training_parameters["cost_coord"]
     # use the GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -226,13 +280,13 @@ def main(model_config, resume_epoch=None):
     print("# Number of parameters of the backbone:", total_params_backbone)
     print("# Real parameters count:", total_params - total_params_backbone)
     # create the loss calculator
-    matcher = HungarianMatcher(cost_class=1.0, cost_coord=5.0)
+    matcher = HungarianMatcher(cost_class=cost_class, cost_coord=cost_coord)
     criterion = SetCriterion(
         num_classes=model_parameters["num_classes"],
         matcher=matcher,
         weight_dict={
-            "loss_ce": 1.0,
-            "loss_button": 5.0,
+            "loss_ce": cost_class,
+            "loss_button": cost_coord,
         },
         eos_coef=0.1,
     ).to(device)
@@ -245,75 +299,45 @@ def main(model_config, resume_epoch=None):
     # scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
-    start_epoch = 0
-    best_val_loss = float("inf")
+    # create the trainer
+    _trainer = Trainer(model, criterion, optimizer, scheduler, device, train_loader, val_loader)
+    return _trainer
+
+
+def main(model_config, resume_path=None):
     save_dir = Path("checkpoints")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    if resume_epoch is not None:
-        checkpoint_path = save_dir / "last.pt"
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        saved_epoch = checkpoint.get("epoch", None)
-        if saved_epoch is None:
-            raise RuntimeError("The checkpoint does not contain an 'epoch' field.")
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        best_val_loss = checkpoint.get("val_loss", float("inf"))
-        start_epoch = resume_epoch
-        print(f"# Resumed from last checkpoint")
-        print(f"# Checkpoint epoch: {saved_epoch}")
-        print(f"# Continuing training from epoch {start_epoch + 1}")
+    trainer = init_trainer(model_config)
+    if resume_path is not None:
+        trainer.resume(Path(resume_path))
 
-    # TRAINING LOOP
-    print(f"# TRAIN model '{model.name}'")
+    num_epochs = model_config["training_parameters"]["num_epochs"]
+    start_epoch = trainer.epoch
     for epoch in range(start_epoch, start_epoch + num_epochs):
-        train_stats = train_one_epoch(model, criterion, train_loader, optimizer, device)
-        val_stats = evaluate(model, criterion, val_loader, device)
-        scheduler.step()
+        train_stats, val_stats = trainer.step()
         # log the epoch results
         print(
-            f"Epoch [{epoch+1}/{num_epochs}] | "
+            f"Epoch [{epoch+1}/{start_epoch + num_epochs}] | "
             f"train loss: {train_stats['loss']:.4f} "
             f"(ce={train_stats['loss_ce']:.4f}, btn={train_stats['loss_button']:.4f}) | "
             f"val loss: {val_stats['loss']:.4f} "
             f"(ce={val_stats['loss_ce']:.4f}, btn={val_stats['loss_button']:.4f})"
         )
         # save latest
-        torch.save(
-            {
-                "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "val_loss": val_stats["loss"],
-            },
-            save_dir / "last.pt"
-        )
-        # save best
-        if val_stats["loss"] < best_val_loss:
-            best_val_loss = val_stats["loss"]
-            torch.save(
-                {
-                    "epoch": epoch + 1,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "val_loss": val_stats["loss"],
-                },
-                save_dir / "best.pt"
-            )
-            print(f"  Saved new best checkpoint: val_loss={best_val_loss:.4f}")
+        trainer.save_checkpoint(save_dir / "last.pt")
+        if trainer.last_was_best:
+            trainer.save_checkpoint(save_dir / "best.pt")
+            print(f"    New best model saved with val loss: {val_stats['loss']:.4f}")
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", type=int, default=None)
+    parser.add_argument("--resume", type=str, default=None)
     args = parser.parse_args()
     # configuration
     config_path = Path("model.json")
     with open(config_path, "r") as file:
         model_config = json.load(file)
-    main(model_config, resume_epoch=args.resume)
+    main(model_config, resume_path=args.resume)

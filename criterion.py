@@ -62,10 +62,6 @@ class HungarianMatcher(nn.Module):
             # Classification cost:
             # want high probability for the target class (class 0 here)
             # cost shape [Q, num_gt]
-            print("===== Debug: Classification Cost Calculation =====")
-            print(out_prob[b])
-            print(tgt_labels)
-            print(out_prob[b][:, tgt_labels])
             cost_class = -out_prob[b][:, tgt_labels]
 
             # Coordinate cost

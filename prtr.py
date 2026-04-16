@@ -54,18 +54,9 @@ class PRTR(nn.Module):
         # inputs: [B, 3, H_img, W_img]
         B = inputs.shape[0]
 
-        # 1) Backbone
         x = self.backbone(inputs)          # [B, 2048, H, W]
-
-        # 2) Project to transformer dim
         x = self.conv(x)                   # [B, 256, H, W]
-
-        # 3) Positional encoding on feature map
         pos = self.position_embedding(x)   # [B, 256, H, W]
-
-        # pos = pos.flatten(2).transpose(1, 2)   # [B, H*W, 256]
-
-        # 7) Transformer
         hs, memory = self.transformer(
             src=x,
             pos_embed=pos,
@@ -148,7 +139,7 @@ class PRTRSingleHead(nn.Module):
         )  # expected [B, num_queries, 256] or similar depending on your Transformer
         
         pred_logits = self.class_head(hs)         # [B, num_queries, num_classes+1]
-        pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 2]
+        pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 4]
 
         return {
             "pred_logits": pred_logits,
