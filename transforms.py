@@ -543,3 +543,16 @@ class RandomProgressiveFoveatedBlur(Transform):
             out = np.clip(out, 0, 255).astype(np.uint8)
 
         return Image.fromarray(out), labels
+    
+
+
+class RandomResize(Transform):
+    def __init__(self, sizes, resample=Image.BILINEAR):
+        self.sizes = list(sizes)
+        self.resample = resample
+
+    def __call__(self, image, labels):
+        size = random.choice(self.sizes)
+        image = image.resize((size, size), self.resample)
+        # labels stay unchanged because they are normalized in [0,1]
+        return image, labels

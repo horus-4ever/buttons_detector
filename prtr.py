@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torchvision.models import resnet50, ResNet50_Weights
 from transformer import Transformer
+import torch.nn.functional as F
 from position_encoding import PositionEmbeddingSine2D
 from utils import MLP
 from pathlib import Path
@@ -50,18 +51,31 @@ class PRTR(nn.Module):
         self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
         
 
-    def forward(self, inputs):
+    def forward(self, inputs, padding_mask=None):
         # inputs: [B, 3, H_img, W_img]
         B = inputs.shape[0]
 
+        # C = number of channels after the projection
         x = self.backbone(inputs)          # [B, 2048, H, W]
-        x = self.conv(x)                   # [B, 256, H, W]
-        pos = self.position_embedding(x)   # [B, 256, H, W]
+        x = self.conv(x)                   # [B, C, H, W]
+
+        if padding_mask is None:
+            padding_mask = torch.zeros(
+                (inputs.shape[0], inputs.shape[2], inputs.shape[3]), dtype=torch.bool, device=x.device
+            )
+        
+        feat_mask = F.interpolate(
+            padding_mask[:, None].float(),
+            size=x.shape[-2:], mode="nearest"
+        )[:, 0].to(torch.bool)
+
+        pos = self.position_embedding(feat_mask)   # [B, C, H, W]
         hs, memory = self.transformer(
             src=x,
             pos_embed=pos,
-            query_embed=self.query_embed.weight
-        )  # expected [B, num_queries, 256] or similar depending on your Transformer
+            query_embed=self.query_embed.weight,
+            mask=feat_mask
+        )  # expected [B, num_queries, C] or similar depending on your Transformer
         
         pred_logits = self.class_head(hs)         # [B, num_queries, num_classes+1]
         pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 2]

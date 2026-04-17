@@ -29,12 +29,12 @@ class Decoder(nn.Module):
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], att_map_size: tuple):
+    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], att_map_size: tuple, memory_key_padding_mask: Optional[Tensor] = None):
         B, num_queries, _ = input.shape
         output = input
         self.attn_maps = []
         for layer in self.layers:
-            output, weights = layer(output, memory, pos, queries_pos)
+            output, weights = layer(output, memory, pos, queries_pos, memory_key_padding_mask=memory_key_padding_mask)
             # attn = weights[0][0]
             # memory_attention_weights (average=False) --> [B, num_queries, source_size]
             # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
@@ -83,7 +83,7 @@ class DecoderLayer(nn.Module):
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor]):
+    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
         # # INPUT SHAPE: [B, num_queries, C]
         # computes k and q for queries attention
         k_queries = q_queries = self.with_pos_embed(input, queries_pos)
@@ -98,7 +98,7 @@ class DecoderLayer(nn.Module):
         k_memory = self.with_pos_embed(memory, pos)
         q_memory = self.with_pos_embed(add_norm_out, queries_pos)
         # compute self-attention
-        memory_attention_out, memory_attention_weights = self.memory_attention(q_memory, k_memory, v_memory, need_weights=True, average_attn_weights=True)
+        memory_attention_out, memory_attention_weights = self.memory_attention(q_memory, k_memory, v_memory, need_weights=True, average_attn_weights=True, key_padding_mask=memory_key_padding_mask)
         memory_attention_out = self.dropout2(memory_attention_out)
         # memory_attention_weights (average=False) --> [B, num_queries, source_size]
         # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]

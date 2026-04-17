@@ -88,8 +88,26 @@ class ButtonDataset(Dataset):
 
 def collate_fn(batch):
     images, targets = zip(*batch)
-    images = torch.stack(images, dim=0)
-    return images, list(targets)
+    # get the maximum width and height of the images
+    max_h = max(img.shape[1] for img in images)
+    max_w = max(img.shape[2] for img in images)
+    batch_size = len(images)
+    channels = images[0].shape[0]
+    dtype = images[0].dtype
+    # create a tensor for the images and a tensor for the padding mask (True for padded pixels)
+    padded_images = torch.zeros((batch_size, channels, max_h, max_w), dtype=dtype)
+    padding_mask = torch.ones((batch_size, max_h, max_w), dtype=torch.bool)
+    new_targets = []
+    for i, (img, tgt) in enumerate(zip(images, targets)):
+        _, h, w = img.shape
+        padded_images[i, :, :h, :w] = img
+        padding_mask[i, :h, :w] = False
+
+        tgt = dict(tgt)
+        tgt["size"] = torch.tensor([h, w], dtype=torch.int64)  # size after resize, before pad
+        new_targets.append(tgt)
+
+    return padded_images, padding_mask, new_targets
 
 
 class Trainer:
@@ -114,8 +132,9 @@ class Trainer:
             "loss_ce": 0.0,
             "loss_button": 0.0,
         }
-        for images, targets in self.dataloader:
+        for images, padding_mask, targets in self.dataloader:
             images = images.to(self.device)
+            padding_mask = padding_mask.to(self.device)
             targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
             # forward into the model and comoute the loss
             outputs = self.model(images)
@@ -149,7 +168,6 @@ class Trainer:
         return {k: v / n for k, v in running.items()}
     
     def step(self):
-        self._transforms = self._get_epoch_transforms()
         train_stats = self.train_one_epoch()
         val_stats = self.evaluate()
         self.scheduler.step()
@@ -189,13 +207,12 @@ class Trainer:
 
     @property
     def transforms(self):
-        return self._transforms
+        return self.get_transforms()
 
-    def _get_epoch_transforms(self) -> ComposeWithLabels:
-        image_sizes = [512, 640, 768, 896]
-        image_size = random.choice(image_sizes)
+    def get_transforms(self) -> ComposeWithLabels:
+        size = random.choice([512, 576, 640, 704, 768, 832, 896, 960, 1024])
         return ComposeWithLabels([
-            ComposeWrapper(transforms.Resize((image_size, image_size))),
+            ComposeWrapper(transforms.Resize((size, size))),
             RandomSafeErasing(p=0.6),
             # RandomButtonErasing(p=0.2),
             RandomHorizontalFlip(),

@@ -71,7 +71,7 @@ class EncoderLayer(nn.Module):
         # compute Q and K matrices and apply positional embedding to it
         q = k = self.with_pos_embed(input, pos)
         # compute self-attention and dropout
-        self_att_out = self.multi_head_self_attention(q, k, value=input)[0]
+        self_att_out = self.multi_head_self_attention(q, k, value=input, key_padding_mask=src_key_padding_mask)[0]
         self_att_out = self.dropout1(self_att_out)
         # first add and normalize
         add_norm_out = input + self_att_out
