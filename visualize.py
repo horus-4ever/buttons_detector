@@ -486,6 +486,9 @@ if __name__ == "__main__":
     model_config_path = CHECKPOINT_DIR / f"{model_name}.json"
     model_weights_path = CHECKPOINT_DIR / f"{model_name}.pt"
 
+    model_config_path = "model.json"
+    model_weights_path = "checkpoints_finetune/best.pt"
+
     model = load_model(str(model_config_path), str(model_weights_path), DEVICE)
     matcher = build_matcher()
 

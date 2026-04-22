@@ -51,13 +51,14 @@ class ButtonDataset(Dataset):
         name = ann["name"]
         width = ann["width"]
         height = ann["height"]
-        img_path = self.images_dir / f"{name}.png"
+        img_path = self.images_dir / f"{name}.jpg"
         if not img_path.exists():
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
         # get the annotations
         buttons = ann.get("buttons", [])
         coords = []
         for b in buttons:
+            b = b["center"] # get the center coordinates
             # WARNING: Coordinates are in Blender representation (top -> bottom).
             # We need to convert them in bottom -> top
             if "x_ndc" in b and "y_ndc" in b:
@@ -137,7 +138,7 @@ class Trainer:
             padding_mask = padding_mask.to(self.device)
             targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
             # forward into the model and comoute the loss
-            outputs = self.model(images)
+            outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
             # backpropagate
             self.optimizer.zero_grad()
@@ -156,10 +157,11 @@ class Trainer:
         self.criterion.eval()
         # define the losses
         running = {"loss": 0.0, "loss_ce": 0.0, "loss_button": 0.0}
-        for images, targets in self.val_dataloader:
+        for images, padding_mask, targets in self.val_dataloader:
             images = images.to(self.device)
+            padding_mask = padding_mask.to(self.device)
             targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
-            outputs = self.model(images)
+            outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
             for k in running:
                 running[k] += losses[k].item()
