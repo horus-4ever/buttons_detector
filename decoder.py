@@ -32,18 +32,18 @@ class Decoder(nn.Module):
     def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], att_map_size: tuple, memory_key_padding_mask: Optional[Tensor] = None):
         B, num_queries, _ = input.shape
         output = input
-        self.attn_maps = []
-        for layer in self.layers:
+        attn_maps = torch.empty(len(self.layers), B, num_queries, att_map_size[0], att_map_size[1], device=input.device)
+        for i, layer in enumerate(self.layers):
             output, weights = layer(output, memory, pos, queries_pos, memory_key_padding_mask=memory_key_padding_mask)
             # attn = weights[0][0]
             # memory_attention_weights (average=False) --> [B, num_queries, source_size]
             # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
             width, height = att_map_size
-            queries_attn_maps = [weights[0][i].reshape(height, width) for i in range(num_queries)]
-            self.attn_maps.append(queries_attn_maps)
+            queries_attn_maps = weights.reshape(B, -1, width, height)
+            attn_maps[i] = queries_attn_maps
         # normalize and return
         output = self.norm(output)
-        return output
+        return output, attn_maps
 
 
 class DecoderLayer(nn.Module):

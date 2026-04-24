@@ -52,5 +52,5 @@ class Transformer(nn.Module):
         memory = self.encoder(src, pos=pos_embed, src_key_padding_mask=mask) # [B, num_queries, C]
         # forward of decoder
         # result of shape [B, num_queries, C]
-        result = self.decoder(decoder_input, memory, pos=pos_embed, queries_pos=query_embed, att_map_size=(att_height, att_width), memory_key_padding_mask=mask)
-        return result, memory
+        result, attn_maps = self.decoder(decoder_input, memory, pos=pos_embed, queries_pos=query_embed, att_map_size=(att_height, att_width), memory_key_padding_mask=mask)
+        return result, memory, attn_maps

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Dict
+from typing import Any, List, Dict, Mapping
 from scipy.optimize import linear_sum_assignment
 
 
@@ -149,7 +149,58 @@ class SetCriterion(nn.Module):
             loss_button = 0.0
             for p1, p2 in zip(matched_pred, matched_tgt):
                 loss_button = torch.linalg.vector_norm(p1 - p2) + loss_button
+            loss_button = loss_button / len(matched_pred)
         return {"loss_button": loss_button}
+    
+    def loss_attn_maps(self, outputs, targets, indices):
+        attn_maps = outputs["attn_maps"]  # [num_layers, B, Q, att_h, att_w]
+        last_attn = attn_maps[-1]         # [B, Q, att_h, att_w]
+
+        pred_coords = outputs["pred_buttons"]  # [B, Q, 2]
+
+        device = last_attn.device
+        B, Q, H_att, W_att = last_attn.shape
+
+        # Make a normalized coordinate grid in [0, 1]
+        ys = torch.linspace(0, 1, H_att, device=device)
+        xs = torch.linspace(0, 1, W_att, device=device)
+
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")  # [H_att, W_att]
+
+        losses = []
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if len(src_idx) == 0:
+                continue
+
+            attn = last_attn[b, src_idx]        # [N, H_att, W_att]
+            pred = pred_coords[b, src_idx]      # [N, 2]
+
+            # Normalize attention to a probability distribution.
+            # If attn is already softmaxed, this is still mostly safe.
+            attn = attn.flatten(1)              # [N, H_att * W_att]
+            attn = attn.clamp_min(1e-8)
+            attn = attn / attn.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+            xx_flat = xx.flatten()              # [H_att * W_att]
+            yy_flat = yy.flatten()              # [H_att * W_att]
+
+            # Soft-argmax / expected coordinate of attention
+            attn_x = (attn * xx_flat[None, :]).sum(dim=1)
+            attn_y = (attn * yy_flat[None, :]).sum(dim=1)
+
+            attn_coord = torch.stack([attn_x, attn_y], dim=1)  # [N, 2]
+
+            # Consistency loss: predicted coordinate should match attention-implied coordinate
+            loss = F.smooth_l1_loss(pred, attn_coord, reduction="mean")
+
+            losses.append(loss)
+
+        if len(losses) == 0:
+            return {"loss_attn": last_attn.sum() * 0.0}
+
+        loss_attn = torch.stack(losses).mean()
+        return {"loss_attn": loss_attn}
 
     def forward(self, outputs, targets):
         indices = self.matcher(outputs, targets)
@@ -157,6 +208,7 @@ class SetCriterion(nn.Module):
         losses = {}
         losses.update(self.loss_labels(outputs, targets, indices))
         losses.update(self.loss_buttons(outputs, targets, indices))
+        losses.update(self.loss_attn_maps(outputs, targets, indices))
 
         total_loss = 0.0
         for k, v in losses.items():

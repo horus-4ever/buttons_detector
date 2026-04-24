@@ -132,6 +132,7 @@ class Trainer:
             "loss": 0.0,
             "loss_ce": 0.0,
             "loss_button": 0.0,
+            "loss_attn": 0.0
         }
         for images, padding_mask, targets in self.dataloader:
             images = images.to(self.device)
@@ -156,7 +157,7 @@ class Trainer:
         self.model.eval()
         self.criterion.eval()
         # define the losses
-        running = {"loss": 0.0, "loss_ce": 0.0, "loss_button": 0.0}
+        running = {"loss": 0.0, "loss_ce": 0.0, "loss_button": 0.0, "loss_attn": 0.0}
         for images, padding_mask, targets in self.val_dataloader:
             images = images.to(self.device)
             padding_mask = padding_mask.to(self.device)
@@ -238,7 +239,7 @@ def get_trainer():
 def init_trainer(model_config):
     global _trainer
     # configuration
-    dataset_root = "dataset"
+    dataset_root = model_config["dataset"]
     training_parameters = model_config["training_parameters"]
     model_parameters = model_config["parameters"]
     model_name = model_config["model_name"]
@@ -251,6 +252,7 @@ def init_trainer(model_config):
     seed = training_parameters["seed"]
     cost_class = training_parameters["cost_class"]
     cost_coord = training_parameters["cost_coord"]
+    cost_attn_map = training_parameters["cost_attn_map"]
     # use the GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -306,6 +308,7 @@ def init_trainer(model_config):
         weight_dict={
             "loss_ce": cost_class,
             "loss_button": cost_coord,
+            "loss_attn": cost_attn_map,
         },
         eos_coef=0.1,
     ).to(device)
@@ -339,9 +342,9 @@ def main(model_config, resume_path=None):
         print(
             f"Epoch [{epoch+1}/{start_epoch + num_epochs}] | "
             f"train loss: {train_stats['loss']:.4f} "
-            f"(ce={train_stats['loss_ce']:.4f}, btn={train_stats['loss_button']:.4f}) | "
+            f"(ce={train_stats['loss_ce']:.4f}, btn={train_stats['loss_button']:.4f}, attn={train_stats['loss_attn']:.4f}) | "
             f"val loss: {val_stats['loss']:.4f} "
-            f"(ce={val_stats['loss_ce']:.4f}, btn={val_stats['loss_button']:.4f})"
+            f"(ce={val_stats['loss_ce']:.4f}, btn={val_stats['loss_button']:.4f}, attn={val_stats['loss_attn']:.4f})"
         )
         # save latest
         trainer.save_checkpoint(save_dir / "last.pt")
