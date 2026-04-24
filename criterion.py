@@ -146,9 +146,9 @@ class SetCriterion(nn.Module):
         else:
             matched_pred = torch.cat(matched_pred, dim=0)
             matched_tgt = torch.cat(matched_tgt, dim=0)
-            loss_button = torch.linalg.vector_norm(matched_pred - matched_tgt).mean()
-            # loss_button = loss_button + (exp(15 * loss_button) - 1)
-
+            loss_button = 0.0
+            for p1, p2 in zip(matched_pred, matched_tgt):
+                loss_button = torch.linalg.vector_norm(p1 - p2) + loss_button
         return {"loss_button": loss_button}
 
     def forward(self, outputs, targets):

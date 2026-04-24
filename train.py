@@ -51,14 +51,14 @@ class ButtonDataset(Dataset):
         name = ann["name"]
         width = ann["width"]
         height = ann["height"]
-        img_path = self.images_dir / f"{name}.jpg"
+        img_path = self.images_dir / f"{name}.png"
         if not img_path.exists():
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
         # get the annotations
         buttons = ann.get("buttons", [])
         coords = []
         for b in buttons:
-            b = b["center"] # get the center coordinates
+            # b = b["center"] # get the center coordinates
             # WARNING: Coordinates are in Blender representation (top -> bottom).
             # We need to convert them in bottom -> top
             if "x_ndc" in b and "y_ndc" in b:
