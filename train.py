@@ -56,30 +56,37 @@ class ButtonDataset(Dataset):
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
         # get the annotations
         buttons = ann.get("buttons", [])
+        keypoints = ann.get("keypoints", [])
         coords = []
-        for b in buttons:
+        for b, k in zip(buttons, keypoints):
             b = b["center"] # get the center coordinates
             # WARNING: Coordinates are in Blender representation (top -> bottom).
             # We need to convert them in bottom -> top
             if "x_ndc" in b and "y_ndc" in b:
-                x = float(b["x_ndc"])
-                y = 1 - float(b["y_ndc"]) # convert in bottom -> top representation
+                x1 = float(b["x_ndc"])
+                y1 = 1 - float(b["y_ndc"]) # convert in bottom -> top representation
             else: # if normalized coordinates are not present, compute them
-                x = float(b["x_px"]) / float(width)
-                y = float(b["y_px"]) / float(height)
-            coords.append([x, y])
+                x1 = float(b["x_px"]) / float(width)
+                y1 = float(b["y_px"]) / float(height)
+            if "x_ndc" in k and "y_ndc" in k:
+                x2 = float(k["x_ndc"])
+                y2 = 1 - float(k["y_ndc"]) # convert in bottom -> top representation
+            else: # if normalized coordinates are not present, compute them
+                x2 = float(k["x_px"]) / float(width)
+                y2 = float(k["y_px"]) / float(height)
+            coords.append([x1, y1, x2, y2]) # [button_x, button_y, hole_x, hole_y]
         # open the corresponding image (RGB mode)
         image = Image.open(img_path).convert("RGB")
         image, coords = self.transform_image(image, coords)  # [3, H, W], values in [0,1]
         # this should not happen
         if len(coords) == 0:
-            target_buttons = torch.zeros((0, 2), dtype=torch.float32)
+            target_buttons = torch.zeros((0, 4), dtype=torch.float32)
         else:
             target_buttons = torch.tensor(coords, dtype=torch.float32)
 
         target = {
             "labels": torch.zeros((len(target_buttons),), dtype=torch.int64),  # only one class: button => class 0
-            "buttons": target_buttons,  # [num_buttons, 2], normalized
+            "buttons": target_buttons,  # [num_buttons, 4], normalized
             "image_id": name,
             "size": torch.tensor([height, width], dtype=torch.int64),
         }
@@ -111,22 +118,6 @@ def collate_fn(batch):
     return padded_images, padding_mask, new_targets
 
 
-<<<<<<< HEAD
-class HungarianMatcher(nn.Module):
-    """
-    Matches predicted queries to GT buttons.
-
-    Cost = classification cost + coordinate cost
-    """
-
-    def __init__(self, cost_class: float = 1.0, cost_coord: float = 5.0):
-        super().__init__()
-        self.cost_class = cost_class
-        self.cost_coord = cost_coord
-
-        if cost_class == 0 and cost_coord == 0:
-            raise ValueError("All costs cannot be 0")
-=======
 class Trainer:
     def __init__(self, model, criterion, optimizer, scheduler, device, dataloader, val_dataloader):
         self.model = model
@@ -140,7 +131,6 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.last_was_best = False
         self._transforms = None
->>>>>>> attnmap_loss
 
     def train_one_epoch(self):
         self.model.train()
@@ -170,130 +160,6 @@ class Trainer:
         return {k: v / n for k, v in running.items()}
     
     @torch.no_grad()
-<<<<<<< HEAD
-    def forward(self, outputs: Dict[str, torch.Tensor], targets: List[Dict[str, torch.Tensor]]):
-        """
-        outputs:
-            pred_logits: [B, Q, C+1]
-            pred_buttons: [B, Q, 2]
-
-        targets:
-            list of dicts with:
-                labels: [num_gt]
-                buttons: [num_gt, 2]
-
-        Returns:
-            list of size B, each element is (pred_indices, target_indices)
-        """
-        pred_logits = outputs["pred_logits"]      # [B, Q, C+1]
-        pred_buttons = outputs["pred_buttons"]    # [B, Q, 2]
-
-        bs, num_queries = pred_logits.shape[:2]
-
-        # Convert logits to probabilities
-        out_prob = pred_logits.softmax(-1)  # [B, Q, C+1]
-        out_coord = pred_buttons            # [B, Q, 2]
-
-        indices = []
-
-        for b in range(bs):
-            tgt_labels = targets[b]["labels"]     # [num_gt]
-            tgt_coords = targets[b]["buttons"]    # [num_gt, 2]
-
-
-            if tgt_coords.numel() == 0:
-                indices.append((
-                    torch.empty(0, dtype=torch.int64),
-                    torch.empty(0, dtype=torch.int64)
-                ))
-                continue
-
-            # Classification cost:
-            # want high probability for the target class (class 0 here)
-            # cost shape [Q, num_gt]
-            cost_class = -out_prob[b][:, tgt_labels]
-
-            # Coordinate L1 cost
-            # out_coord[b]: [Q, 2], tgt_coords: [num_gt, 2]
-            cost_coord = torch.cdist(out_coord[b], tgt_coords, p=2)
-
-            # Total cost
-            C = self.cost_class * cost_class + self.cost_coord * cost_coord
-            C = C.cpu()
-
-            pred_ind, tgt_ind = linear_sum_assignment(C)
-            indices.append((
-                torch.as_tensor(pred_ind, dtype=torch.int64),
-                torch.as_tensor(tgt_ind, dtype=torch.int64)
-            ))
-
-        return indices
-
-
-class SetCriterion(nn.Module):
-    """
-    DETR-style criterion for:
-      - class prediction
-      - button coordinate prediction
-    """
-
-    def __init__(
-        self,
-        num_classes: int,
-        matcher: HungarianMatcher,
-        weight_dict: Dict[str, float],
-        eos_coef: float = 0.1,
-    ):
-        super().__init__()
-        self.num_classes = num_classes
-        self.matcher = matcher
-        self.weight_dict = weight_dict
-
-        # Weight for classification:
-        # class 0 = button
-        # class 1 = no-object
-        empty_weight = torch.ones(num_classes + 1)
-        empty_weight[-1] = eos_coef
-        self.register_buffer("empty_weight", empty_weight)
-
-    def loss_labels(self, outputs, targets, indices):
-        src_logits = outputs["pred_logits"]  # [B, Q, C+1]
-        bs, num_queries, num_classes_plus_bg = src_logits.shape
-
-        # default target class for all queries = no-object
-        target_classes = torch.full(
-            (bs, num_queries),
-            fill_value=self.num_classes,  # index of no-object
-            dtype=torch.int64,
-            device=src_logits.device,
-        )
-
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if len(src_idx) > 0:
-                target_classes[b, src_idx] = targets[b]["labels"][tgt_idx].to(src_logits.device)
-
-        loss_ce = F.cross_entropy(
-            src_logits.transpose(1, 2),  # [B, C+1, Q]
-            target_classes,
-            weight=self.empty_weight,
-        )
-        return {"loss_ce": loss_ce}
-
-    def loss_buttons(self, outputs, targets, indices):
-        src_coords = outputs["pred_buttons"]  # [B, Q, 2]
-        bs, q, _ = src_coords.shape
-
-        matched_pred = []
-        matched_tgt = []
-
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if len(src_idx) > 0:
-                matched_pred.append(src_coords[b, src_idx])
-                matched_tgt.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-
-        if len(matched_pred) == 0:
-            loss_button = torch.tensor(0.0, device=src_coords.device)
-=======
     def evaluate(self):
         self.model.eval()
         self.criterion.eval()
@@ -319,53 +185,11 @@ class SetCriterion(nn.Module):
         if val_stats["loss"] < self.best_val_loss:
             self.best_val_loss = val_stats["loss"]
             self.last_was_best = True
->>>>>>> attnmap_loss
         else:
             self.last_was_best = False
         self.epoch += 1
         return train_stats, val_stats
 
-<<<<<<< HEAD
-        return {"loss_button": loss_button}
-    
-    def loss_holes(self, outputs, targets, indices):
-        src_coords = outputs["pred_holes"]
-        bs, q, _ = src_coords.shape
-
-        matched_pred = []
-        matched_tgt = []
-
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if len(src_idx) > 0:
-                matched_pred.append(src_coords[b, src_idx])
-                matched_tgt.append(targets[b]["pred_holes"][tgt_idx].to(src_coords.device))
-
-        if len(matched_pred) == 0:
-            loss_holes = torch.tensor(0.0, device=src_coords.device)
-        else:
-            matched_pred = torch.cat(matched_pred, dim=0)
-            matched_tgt = torch.cat(matched_tgt, dim=0)
-            loss_holes = torch.norm(matched_pred - matched_tgt, dim=-1).mean()
-
-        return {"loss_holes": loss_holes}
-
-    def forward(self, outputs, targets):
-        button_targets = targets["button"]
-        holes_targets = targets["holes"]
-        indices = self.matcher(outputs, button_targets)
-
-        losses = {}
-        losses.update(self.loss_labels(outputs, button_targets, indices))
-        losses.update(self.loss_buttons(outputs, button_targets, indices))
-        losses.update(self.loss_holes(outputs, holes_targets, indices))
-
-        total_loss = 0.0
-        for k, v in losses.items():
-            total_loss = total_loss + self.weight_dict[k] * v
-
-        losses["loss"] = total_loss
-        return losses
-=======
     def resume(self, checkpoint_path: Path):
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
@@ -408,11 +232,11 @@ class SetCriterion(nn.Module):
             ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
             ComposeWrapper(transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)),
             ComposeWrapper(transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))),
+            SaveImage(),
             # RandomProgressiveFoveatedBlur(p=0.5, current_epoch=self.epoch),
             ComposeWrapper(transforms.ToTensor()),
             ComposeWrapper(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
         ])
->>>>>>> attnmap_loss
 
 
 _trainer = None

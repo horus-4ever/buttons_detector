@@ -37,7 +37,7 @@ class RandomSafeErasing(Transform):
     def _is_correct(self, to_avoid, x0, y0, x1, y1, W, H):
         r_x = self.safety_radius * W
         r_y = self.safety_radius * H
-        for bx, by in to_avoid:
+        for bx, by, *_ in to_avoid:
             px = bx * W
             py = by * H
             safe_x0 = px - r_x
@@ -116,11 +116,11 @@ class RandomButtonErasing(Transform):
         draw.rectangle(rectangle, fill=fill)
         # then update the labels
         new_labels = []
-        for (x, y) in labels:
+        for (x, y, kx, ky) in labels:
             point = (x * W, y * H)
             if rect_contains_point(point, rectangle):
                 continue
-            new_labels.append((x, y))
+            new_labels.append((x, y, kx, ky))
         return out, new_labels
 
 
@@ -166,8 +166,8 @@ class RandomHorizontalFlip(Transform):
             return input, labels
         image = input.transpose(Image.FLIP_LEFT_RIGHT)
         new_labels = []
-        for (x, y) in labels:
-            new_labels.append((1.0 - x, y))
+        for (x, y, kx, ky) in labels:
+            new_labels.append((1.0 - x, y, 1.0 - kx, ky))
         return image, new_labels
     
 
@@ -185,11 +185,12 @@ class RandomHorizontalTranslation(Transform):
         translated = Image.new(image.mode, (W, H))
         translated.paste(image, (int(shift * W), 0))
         new_labels = []
-        for (x, y) in labels:
+        for (x, y, kx, ky) in labels:
             new_x = x + shift
+            new_kx = kx + shift
             if new_x < 0.0 or new_x > 1.0:
                 continue
-            new_labels.append((new_x, y))
+            new_labels.append((new_x, y, new_kx, ky))
         return translated, new_labels
 
 
@@ -207,11 +208,12 @@ class RandomVerticalTranslation(Transform):
         translated = Image.new(image.mode, (W, H))
         translated.paste(image, (0, int(shift * H)))
         new_labels = []
-        for (x, y) in labels:
+        for (x, y, kx, ky) in labels:
             new_y = y + shift
+            new_ky = ky + shift
             if new_y < 0.0 or new_y > 1.0:
                 continue
-            new_labels.append((x, new_y))
+            new_labels.append((x, new_y, kx, new_ky))
         return translated, new_labels
 
 
@@ -222,13 +224,21 @@ class SaveImage(Transform):
         draw = ImageDraw.Draw(out)
         W, H = out.size
         radius = 4
-        for i, (x, y) in enumerate(labels):
+        for i, (x, y, kx, ky) in enumerate(labels):
             px = x * W
             py = y * H
             # draw a small circle
             draw.ellipse(
                 (px - radius, py - radius, px + radius, py + radius),
                 fill=(255, 0, 0),
+                outline=(255, 255, 255)
+            )
+            # draw the keypoint
+            kpx = kx * W
+            kpy = ky * H
+            draw.ellipse(
+                (kpx - radius, kpy - radius, kpx + radius, kpy + radius),
+                fill=(0, 255, 200),
                 outline=(255, 255, 255)
             )
             # optional: draw the label index next to it
@@ -269,7 +279,7 @@ class RandomRotation(Transform):
         sin_t = math.sin(theta)
 
         new_labels = []
-        for x, y in labels:
+        for x, y, kx, ky in labels:
             px = x * W
             py = y * H
             dx = px - cx
@@ -280,8 +290,17 @@ class RandomRotation(Transform):
             new_py = cy + new_dy
             new_x = new_px / W
             new_y = new_py / H
+            # also rotate the keypoint coordinates
+            new_kx = kx * W
+            new_ky = ky * H
+            new_kx = new_kx * cos_t - new_ky * sin_t
+            new_ky = new_kx * sin_t + new_ky * cos_t
+            new_kx = cx + new_kx
+            new_ky = cy + new_ky
+            new_kx = new_kx / W
+            new_ky = new_ky / H
             if 0.0 <= new_x <= 1.0 and 0.0 <= new_y <= 1.0:
-                new_labels.append((new_x, new_y))
+                new_labels.append((new_x, new_y, new_kx, new_ky))
         return rotated, new_labels
 
 
@@ -316,14 +335,16 @@ class RandomSafeCrop(Transform):
         bottom = top + crop_h
         cropped = image.crop((left, top, right, bottom))
         new_labels = []
-        for (x, y) in labels:
+        for (x, y, kx, ky) in labels:
             px = x * W
             py = y * H
             new_x = (px - left) / crop_w
             new_y = (py - top) / crop_h
+            new_kx = (kx * W - left) / crop_w
+            new_ky = (ky * H - top) / crop_h
             if new_x < 0.0 or new_x > 1.0 or new_y < 0.0 or new_y > 1.0:
                 continue
-            new_labels.append((new_x, new_y))
+            new_labels.append((new_x, new_y, new_kx, new_ky))
         return cropped, new_labels
     
 
@@ -355,12 +376,14 @@ class RandomZoomOut(Transform):
         offset_y = random.randint(0, H - new_H)
         canvas.paste(resized, (offset_x, offset_y))
         new_labels = []
-        for (x, y) in labels:
+        for (x, y, kx, ky) in labels:
             px = x * new_W + offset_x
             py = y * new_H + offset_y
             new_x = px / W
             new_y = py / H
-            new_labels.append((new_x, new_y))
+            new_kx = (kx * W + offset_x) / W
+            new_ky = (ky * H + offset_y) / H
+            new_labels.append((new_x, new_y, new_kx, new_ky))
         return canvas, new_labels
 
 

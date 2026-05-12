@@ -130,7 +130,7 @@ class SetCriterion(nn.Module):
         return {"loss_ce": loss_ce}
 
     def loss_buttons(self, outputs, targets, indices):
-        src_coords = outputs["pred_buttons"]  # [B, Q, 2]
+        src_coords = outputs["pred_buttons"]  # [B, Q, 4]
         bs, q, _ = src_coords.shape
 
         matched_pred = []
@@ -147,8 +147,8 @@ class SetCriterion(nn.Module):
             matched_pred = torch.cat(matched_pred, dim=0)
             matched_tgt = torch.cat(matched_tgt, dim=0)
             losses = []
-            for p1, p2 in zip(matched_pred, matched_tgt):
-                losses.append(torch.linalg.vector_norm(p1 - p2))
+            for pred1, pred2 in zip(matched_pred, matched_tgt):
+                losses.append(torch.linalg.vector_norm(pred1[:2] - pred2[:2]) + torch.linalg.vector_norm(pred1[2:] - pred2[2:]))
             loss_button = torch.stack(losses).mean()
         return {"loss_button": loss_button}
     

@@ -48,7 +48,7 @@ class PRTR(nn.Module):
         self.query_embed = nn.Embedding(num_queries, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
+        self.button_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
         
 
     def forward(self, inputs, padding_mask=None):
@@ -78,20 +78,14 @@ class PRTR(nn.Module):
         )  # expected [B, num_queries, C] or similar depending on your Transformer
         
         pred_logits = self.class_head(hs)         # [B, num_queries, num_classes+1]
-        pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 2]
-        pred_holes = self.holes_head(hs).sigmoid() # [B, num_queries, 2]
+        pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 4]
 
         return {
             "pred_logits": pred_logits,
             "pred_buttons": pred_buttons,
-<<<<<<< HEAD
-            "pred_holes": pred_holes,
-            "memory": memory
-=======
             "memory": memory,
             "attn_maps": attn_maps,
             "image_size": (H, W)
->>>>>>> attnmap_loss
         }
 
 
