@@ -187,6 +187,7 @@ def run_model(model, image: Image.Image, device):
         "kept_buttons": pred_buttons[keep],
         "kept_scores": button_scores[keep],
         "raw_outputs": outputs,   # keep full batched outputs for matcher / attention
+        "attn_maps": outputs["attn_maps"]
     }
     return result
 
@@ -314,16 +315,8 @@ def _normalize_attention_maps(attn_maps: torch.Tensor):
     raise ValueError(f"Unsupported attention map shape: {tuple(attn_maps.shape)}")
 
 
-def visualize_attention(image: Image.Image, model, name: str):
-    if not hasattr(model.transformer.decoder, "attn_maps"):
-        print("No decoder attention maps found on model.transformer.decoder.attn_maps")
-        return
-
-    if len(model.transformer.decoder.attn_maps) == 0:
-        print("decoder.attn_maps is empty")
-        return
-
-    attn_maps = model.transformer.decoder.attn_maps[-1]
+def visualize_attention(image: Image.Image, attn_maps: torch.Tensor, name: str):
+    attn_maps = attn_maps[-1][-1]
     # attn_maps = _normalize_attention_maps(attn_maps)  # [Q, Hf, Wf]
 
     width, height = image.size
@@ -452,7 +445,7 @@ def visualize_one(name_or_path: str, model, matcher, save_attention_maps: bool =
     print(f"Saved visualization to: {out_path}")
 
     if save_attention_maps:
-        visualize_attention(image, model, name)
+        visualize_attention(image, infer["attn_maps"], name)
 
 
 def visualize_directory(directory: Path, model, matcher, save_attention_maps: bool = False):
@@ -478,7 +471,7 @@ if __name__ == "__main__":
                         help="Model name without extension, looked up in CHECKPOINT_DIR")
     parser.add_argument("-i", "--input", type=str, default="dataset/real",
                         help="Image stem, image path, or directory")
-    parser.add_argument("--attention", action="store_true",
+    parser.add_argument("--attention", type=bool, default=True,
                         help="Also save decoder attention maps")
     args = parser.parse_args()
 
@@ -486,8 +479,8 @@ if __name__ == "__main__":
     model_config_path = CHECKPOINT_DIR / f"{model_name}.json"
     model_weights_path = CHECKPOINT_DIR / f"{model_name}.pt"
 
-    model_config_path = "model.json"
-    model_weights_path = "checkpoints_finetune/best.pt"
+    # model_config_path = "model.json"
+    # model_weights_path = "checkpoints_finetune/best.pt"
 
     model = load_model(str(model_config_path), str(model_weights_path), DEVICE)
     matcher = build_matcher()

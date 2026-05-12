@@ -58,7 +58,7 @@ class ButtonDataset(Dataset):
         buttons = ann.get("buttons", [])
         coords = []
         for b in buttons:
-            # b = b["center"] # get the center coordinates
+            b = b["center"] # get the center coordinates
             # WARNING: Coordinates are in Blender representation (top -> bottom).
             # We need to convert them in bottom -> top
             if "x_ndc" in b and "y_ndc" in b:
@@ -213,7 +213,7 @@ class Trainer:
         return self.get_transforms()
 
     def get_transforms(self) -> ComposeWithLabels:
-        size = random.choice([512, 576, 640, 704, 768, 832, 896, 960, 1024])
+        size = random.choice([512, 640, 768, 896])
         return ComposeWithLabels([
             ComposeWrapper(transforms.Resize((size, size))),
             RandomSafeErasing(p=0.6),
@@ -221,9 +221,11 @@ class Trainer:
             RandomHorizontalFlip(),
             RandomHorizontalTranslation(p=0.5, min=-0.3, max=0.3),
             RandomVerticalTranslation(p=0.5, min=-0.3, max=0.3),
-            RandomRotation(p=0.5, min_angle=-45, max_angle=45),
+            # RandomRotation(p=0.5, min_angle=-45, max_angle=45),
             ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
-            RandomProgressiveFoveatedBlur(p=0.5, current_epoch=self.epoch),
+            ComposeWrapper(transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)),
+            ComposeWrapper(transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))),
+            # RandomProgressiveFoveatedBlur(p=0.5, current_epoch=self.epoch),
             ComposeWrapper(transforms.ToTensor()),
             ComposeWrapper(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
         ])
@@ -326,8 +328,8 @@ def init_trainer(model_config):
     return _trainer
 
 
-def main(model_config, resume_path=None):
-    save_dir = Path("checkpoints")
+def main(model_config, resume_path=None, save_weights_folder="checkpoints"):
+    save_dir = Path(save_weights_folder)
     save_dir.mkdir(parents=True, exist_ok=True)
 
     trainer = init_trainer(model_config)
@@ -357,9 +359,11 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--model", type=str, default="model.json")
+    parser.add_argument("--save-weights", type=str, default="checkpoints")
     args = parser.parse_args()
     # configuration
-    config_path = Path("model.json")
+    config_path = Path(args.model)
     with open(config_path, "r") as file:
         model_config = json.load(file)
-    main(model_config, resume_path=args.resume)
+    main(model_config, resume_path=args.resume, save_weights_folder=args.save_weights)

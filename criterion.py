@@ -146,10 +146,10 @@ class SetCriterion(nn.Module):
         else:
             matched_pred = torch.cat(matched_pred, dim=0)
             matched_tgt = torch.cat(matched_tgt, dim=0)
-            loss_button = 0.0
+            losses = []
             for p1, p2 in zip(matched_pred, matched_tgt):
-                loss_button = torch.linalg.vector_norm(p1 - p2) + loss_button
-            loss_button = loss_button / len(matched_pred)
+                losses.append(torch.linalg.vector_norm(p1 - p2))
+            loss_button = torch.stack(losses).mean()
         return {"loss_button": loss_button}
     
     def loss_attn_maps(self, outputs, targets, indices):
@@ -172,8 +172,9 @@ class SetCriterion(nn.Module):
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) == 0:
                 continue
-
+            # get attention maps for predicted queries
             attn = last_attn[b, src_idx]        # [N, H_att, W_att]
+            # get button coordinates for predicted queries
             pred = pred_coords[b, src_idx]      # [N, 2]
 
             # Normalize attention to a probability distribution.
@@ -192,7 +193,7 @@ class SetCriterion(nn.Module):
             attn_coord = torch.stack([attn_x, attn_y], dim=1)  # [N, 2]
 
             # Consistency loss: predicted coordinate should match attention-implied coordinate
-            loss = F.smooth_l1_loss(pred, attn_coord, reduction="mean")
+            loss = F.l1_loss(pred, attn_coord, reduction="mean")
 
             losses.append(loss)
 
@@ -200,6 +201,7 @@ class SetCriterion(nn.Module):
             return {"loss_attn": last_attn.sum() * 0.0}
 
         loss_attn = torch.stack(losses).mean()
+        loss_attn = 1.0 * loss_attn
         return {"loss_attn": loss_attn}
 
     def forward(self, outputs, targets):
