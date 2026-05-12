@@ -3,14 +3,17 @@ import random
 from pathlib import Path
 from typing import List, Dict, Tuple
 from math import exp
+from xml.parsers.expat import model
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy.optimize import linear_sum_assignment
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
 from prtr import PRTR
+from criterion import HungarianMatcher, SetCriterion
+from transforms import *
 
 
 class ButtonDataset(Dataset):
@@ -18,26 +21,20 @@ class ButtonDataset(Dataset):
     Images will be resized by the `image_size` parameter.
     """
 
-    def __init__(self, root: str, image_size: int = 512):
+    def __init__(self, root: str):
         self.root = Path(root)
         self.images_dir = self.root / "images"
         self.ann_dir = self.root / "annotations"
-        self.image_size = image_size
 
         self.ann_paths = sorted(self.ann_dir.glob("*.json"))
         # check if there are annotations
         if len(self.ann_paths) == 0:
             raise RuntimeError(f"No JSON files found in {self.ann_dir}")
 
-        self.to_tensor = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            # data augmentation
-            transforms.RandomGrayscale(p=0.1),
-            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
-            # to tensor and normalize
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+    def transform_image(self, image, labels):
+        trainer = get_trainer() # type: ignore
+        to_tensor = trainer.transforms # type: ignore
+        return to_tensor(image, labels) # type: ignore
 
     def __len__(self):
         return len(self.ann_paths)
@@ -57,13 +54,11 @@ class ButtonDataset(Dataset):
         img_path = self.images_dir / f"{name}.png"
         if not img_path.exists():
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
-        # open the corresponding image (RGB mode)
-        image = Image.open(img_path).convert("RGB")
-        image = self.to_tensor(image)  # [3, H, W], values in [0,1]
         # get the annotations
         buttons = ann.get("buttons", [])
         coords = []
         for b in buttons:
+            b = b["center"] # get the center coordinates
             # WARNING: Coordinates are in Blender representation (top -> bottom).
             # We need to convert them in bottom -> top
             if "x_ndc" in b and "y_ndc" in b:
@@ -73,6 +68,9 @@ class ButtonDataset(Dataset):
                 x = float(b["x_px"]) / float(width)
                 y = float(b["y_px"]) / float(height)
             coords.append([x, y])
+        # open the corresponding image (RGB mode)
+        image = Image.open(img_path).convert("RGB")
+        image, coords = self.transform_image(image, coords)  # [3, H, W], values in [0,1]
         # this should not happen
         if len(coords) == 0:
             target_buttons = torch.zeros((0, 2), dtype=torch.float32)
@@ -91,10 +89,29 @@ class ButtonDataset(Dataset):
 
 def collate_fn(batch):
     images, targets = zip(*batch)
-    images = torch.stack(images, dim=0)
-    return images, list(targets)
+    # get the maximum width and height of the images
+    max_h = max(img.shape[1] for img in images)
+    max_w = max(img.shape[2] for img in images)
+    batch_size = len(images)
+    channels = images[0].shape[0]
+    dtype = images[0].dtype
+    # create a tensor for the images and a tensor for the padding mask (True for padded pixels)
+    padded_images = torch.zeros((batch_size, channels, max_h, max_w), dtype=dtype)
+    padding_mask = torch.ones((batch_size, max_h, max_w), dtype=torch.bool)
+    new_targets = []
+    for i, (img, tgt) in enumerate(zip(images, targets)):
+        _, h, w = img.shape
+        padded_images[i, :, :h, :w] = img
+        padding_mask[i, :h, :w] = False
+
+        tgt = dict(tgt)
+        tgt["size"] = torch.tensor([h, w], dtype=torch.int64)  # size after resize, before pad
+        new_targets.append(tgt)
+
+    return padded_images, padding_mask, new_targets
 
 
+<<<<<<< HEAD
 class HungarianMatcher(nn.Module):
     """
     Matches predicted queries to GT buttons.
@@ -109,8 +126,51 @@ class HungarianMatcher(nn.Module):
 
         if cost_class == 0 and cost_coord == 0:
             raise ValueError("All costs cannot be 0")
+=======
+class Trainer:
+    def __init__(self, model, criterion, optimizer, scheduler, device, dataloader, val_dataloader):
+        self.model = model
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.device = device
+        self.val_dataloader = val_dataloader
+        self.dataloader = dataloader
+        self.epoch = 0
+        self.best_val_loss = float("inf")
+        self.last_was_best = False
+        self._transforms = None
+>>>>>>> attnmap_loss
 
+    def train_one_epoch(self):
+        self.model.train()
+        self.criterion.train()
+        running = {
+            "loss": 0.0,
+            "loss_ce": 0.0,
+            "loss_button": 0.0,
+            "loss_attn": 0.0
+        }
+        for images, padding_mask, targets in self.dataloader:
+            images = images.to(self.device)
+            padding_mask = padding_mask.to(self.device)
+            targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
+            # forward into the model and comoute the loss
+            outputs = self.model(images, padding_mask)
+            losses = self.criterion(outputs, targets)
+            # backpropagate
+            self.optimizer.zero_grad()
+            losses["loss"].backward()
+            self.optimizer.step()
+            # compute the total loss of the epoch
+            for k in running:
+                running[k] += losses[k].item()
+        # return the mean of the loss for the epoch
+        n = len(self.dataloader)
+        return {k: v / n for k, v in running.items()}
+    
     @torch.no_grad()
+<<<<<<< HEAD
     def forward(self, outputs: Dict[str, torch.Tensor], targets: List[Dict[str, torch.Tensor]]):
         """
         outputs:
@@ -233,14 +293,39 @@ class SetCriterion(nn.Module):
 
         if len(matched_pred) == 0:
             loss_button = torch.tensor(0.0, device=src_coords.device)
+=======
+    def evaluate(self):
+        self.model.eval()
+        self.criterion.eval()
+        # define the losses
+        running = {"loss": 0.0, "loss_ce": 0.0, "loss_button": 0.0, "loss_attn": 0.0}
+        for images, padding_mask, targets in self.val_dataloader:
+            images = images.to(self.device)
+            padding_mask = padding_mask.to(self.device)
+            targets = [{k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
+            outputs = self.model(images, padding_mask)
+            losses = self.criterion(outputs, targets)
+            for k in running:
+                running[k] += losses[k].item()
+        # compute the mean of the loss
+        n = len(self.val_dataloader)
+        return {k: v / n for k, v in running.items()}
+    
+    def step(self):
+        train_stats = self.train_one_epoch()
+        val_stats = self.evaluate()
+        self.scheduler.step()
+        # update the metrics
+        if val_stats["loss"] < self.best_val_loss:
+            self.best_val_loss = val_stats["loss"]
+            self.last_was_best = True
+>>>>>>> attnmap_loss
         else:
-            matched_pred = torch.cat(matched_pred, dim=0)
-            matched_tgt = torch.cat(matched_tgt, dim=0)
-            loss_button = F.l1_loss(matched_pred, matched_tgt, reduction="sum")
-            loss_button /= bs
-            loss_button = torch.norm(matched_pred - matched_tgt, dim=-1).mean()
-            # loss_button = loss_button + (exp(15 * loss_button) - 1)
+            self.last_was_best = False
+        self.epoch += 1
+        return train_stats, val_stats
 
+<<<<<<< HEAD
         return {"loss_button": loss_button}
     
     def loss_holes(self, outputs, targets, indices):
@@ -280,83 +365,85 @@ class SetCriterion(nn.Module):
 
         losses["loss"] = total_loss
         return losses
+=======
+    def resume(self, checkpoint_path: Path):
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        saved_epoch = checkpoint.get("epoch", None)
+        if saved_epoch is None:
+            raise RuntimeError("The checkpoint does not contain an 'epoch' field.")
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        self.epoch = saved_epoch
+        self.best_val_loss = checkpoint.get("val_loss", float("inf"))
+    
+    def save_checkpoint(self, save_path: Path):
+        torch.save(
+            {
+                "epoch": self.epoch,
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "scheduler_state_dict": self.scheduler.state_dict(),
+                "val_loss": self.best_val_loss,
+            },
+            save_path
+        )
+
+    @property
+    def transforms(self):
+        return self.get_transforms()
+
+    def get_transforms(self) -> ComposeWithLabels:
+        size = random.choice([512, 640, 768, 896])
+        return ComposeWithLabels([
+            ComposeWrapper(transforms.Resize((size, size))),
+            RandomSafeErasing(p=0.6),
+            # RandomButtonErasing(p=0.2),
+            RandomHorizontalFlip(),
+            RandomHorizontalTranslation(p=0.5, min=-0.3, max=0.3),
+            RandomVerticalTranslation(p=0.5, min=-0.3, max=0.3),
+            # RandomRotation(p=0.5, min_angle=-45, max_angle=45),
+            ComposeWrapper(transforms.RandomGrayscale(p=0.1)),
+            ComposeWrapper(transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)),
+            ComposeWrapper(transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))),
+            # RandomProgressiveFoveatedBlur(p=0.5, current_epoch=self.epoch),
+            ComposeWrapper(transforms.ToTensor()),
+            ComposeWrapper(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+        ])
+>>>>>>> attnmap_loss
 
 
-def train_one_epoch(model, criterion, dataloader, optimizer, device):
-    """
-    Train for one epoch, optimize, backpropagate and return the epoch's loss.
-    """
-    model.train()
-    criterion.train()
+_trainer = None
 
-    running = {
-        "loss": 0.0,
-        "loss_ce": 0.0,
-        "loss_button": 0.0,
-    }
+def get_trainer():
+    global _trainer
+    if _trainer is not None:
+        return _trainer
 
-    for images, targets in dataloader:
-        images = images.to(device)
-        targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
-        # forward into the model and comoute the loss
-        outputs = model(images)
-        losses = criterion(outputs, targets)
-        # backpropagate
-        optimizer.zero_grad()
-        losses["loss"].backward()
-        optimizer.step()
-        # compute the total loss of the epoch
-        for k in running:
-            running[k] += losses[k].item()
-    # return the mean of the loss for the epoch
-    n = len(dataloader)
-    return {k: v / n for k, v in running.items()}
-
-
-@torch.no_grad()
-def evaluate(model, criterion, dataloader, device):
-    model.eval()
-    criterion.eval()
-
-    running = {
-        "loss": 0.0,
-        "loss_ce": 0.0,
-        "loss_button": 0.0,
-    }
-
-    for images, targets in dataloader:
-        images = images.to(device)
-        targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
-
-        outputs = model(images)
-        losses = criterion(outputs, targets)
-
-        for k in running:
-            running[k] += losses[k].item()
-
-    n = len(dataloader)
-    return {k: v / n for k, v in running.items()}
-
-
-
-
-def main(resume_from_best=False):
+def init_trainer(model_config):
+    global _trainer
     # configuration
-    dataset_root = "dataset"
-    batch_size = 2
-    num_epochs = 50
-    lr = 1e-4
-    weight_decay = 1e-4
-    train_split = 0.9
-    num_workers = 4
-    seed = 42
-    # task-specific configuration
-    num_classes = 1
-    num_queries = 10
+    dataset_root = model_config["dataset"]
+    training_parameters = model_config["training_parameters"]
+    model_parameters = model_config["parameters"]
+    model_name = model_config["model_name"]
+    batch_size = training_parameters["batch_size"]
+    num_epochs = training_parameters["num_epochs"]
+    lr = training_parameters["lr"]
+    weight_decay = training_parameters["weight_decay"]
+    train_split = training_parameters["train_split"]
+    num_workers = training_parameters["num_workers"]
+    seed = training_parameters["seed"]
+    cost_class = training_parameters["cost_class"]
+    cost_coord = training_parameters["cost_coord"]
+    cost_attn_map = training_parameters["cost_attn_map"]
     # use the GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
+    # sets the seed
     random.seed(seed)
     torch.manual_seed(seed)
 
@@ -391,16 +478,23 @@ def main(resume_from_best=False):
     )
 
     # create the model
-    model = PRTR(num_classes=num_classes, num_queries=num_queries)
+    model = PRTR(model_name, **model_parameters)
     model = model.to(device)
+    # display the number of parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    total_params_backbone = sum(p.numel() for p in model.backbone.parameters())
+    print("# Number of parameters:", total_params)
+    print("# Number of parameters of the backbone:", total_params_backbone)
+    print("# Real parameters count:", total_params - total_params_backbone)
     # create the loss calculator
-    matcher = HungarianMatcher(cost_class=1.0, cost_coord=5.0)
+    matcher = HungarianMatcher(cost_class=cost_class, cost_coord=cost_coord)
     criterion = SetCriterion(
-        num_classes=num_classes,
+        num_classes=model_parameters["num_classes"],
         matcher=matcher,
         weight_dict={
-            "loss_ce": 1.0,
-            "loss_button": 5.0,
+            "loss_ce": cost_class,
+            "loss_button": cost_coord,
+            "loss_attn": cost_attn_map,
         },
         eos_coef=0.1,
     ).to(device)
@@ -413,81 +507,47 @@ def main(resume_from_best=False):
     # scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
-    start_epoch = 0
-    best_val_loss = float("inf")
+    # create the trainer
+    _trainer = Trainer(model, criterion, optimizer, scheduler, device, train_loader, val_loader)
+    return _trainer
 
-    best_ckpt_path = Path("checkpoints") / "best.pt"
 
-    if resume_from_best and best_ckpt_path.exists():
-        print(f"Loading checkpoint from {best_ckpt_path}")
-
-        checkpoint = torch.load(best_ckpt_path, map_location=device)
-
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-
-        start_epoch = checkpoint["epoch"]
-        best_val_loss = checkpoint["val_loss"]
-
-        # IMPORTANT: move optimizer tensors to correct device
-        for state in optimizer.state.values():
-            for k, v in state.items():
-                if torch.is_tensor(v):
-                    state[k] = v.to(device)
-        
-        if "scheduler_state_dict" in checkpoint:
-            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-
-        print(f"Resumed from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
-
-    # TRAINING LOOP
-    best_val_loss = float("inf")
-    save_dir = Path("checkpoints")
+def main(model_config, resume_path=None, save_weights_folder="checkpoints"):
+    save_dir = Path(save_weights_folder)
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    trainer = init_trainer(model_config)
+    if resume_path is not None:
+        trainer.resume(Path(resume_path))
+
+    num_epochs = model_config["training_parameters"]["num_epochs"]
+    start_epoch = trainer.epoch
     for epoch in range(start_epoch, start_epoch + num_epochs):
-        train_stats = train_one_epoch(model, criterion, train_loader, optimizer, device)
-        val_stats = evaluate(model, criterion, val_loader, device)
-        scheduler.step()
+        train_stats, val_stats = trainer.step()
         # log the epoch results
         print(
-            f"Epoch [{epoch+1}/{num_epochs}] | "
+            f"Epoch [{epoch+1}/{start_epoch + num_epochs}] | "
             f"train loss: {train_stats['loss']:.4f} "
-            f"(ce={train_stats['loss_ce']:.4f}, btn={train_stats['loss_button']:.4f}) | "
+            f"(ce={train_stats['loss_ce']:.4f}, btn={train_stats['loss_button']:.4f}, attn={train_stats['loss_attn']:.4f}) | "
             f"val loss: {val_stats['loss']:.4f} "
-            f"(ce={val_stats['loss_ce']:.4f}, btn={val_stats['loss_button']:.4f})"
+            f"(ce={val_stats['loss_ce']:.4f}, btn={val_stats['loss_button']:.4f}, attn={val_stats['loss_attn']:.4f})"
         )
         # save latest
-        torch.save(
-            {
-                "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "val_loss": val_stats["loss"],
-            },
-            save_dir / "last.pt"
-        )
-        # save best
-        if val_stats["loss"] < best_val_loss:
-            best_val_loss = val_stats["loss"]
-            torch.save(
-                {
-                    "epoch": epoch + 1,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "val_loss": val_stats["loss"],
-                },
-                save_dir / "best.pt"
-            )
-            print(f"  Saved new best checkpoint: val_loss={best_val_loss:.4f}")
+        trainer.save_checkpoint(save_dir / "last.pt")
+        if trainer.last_was_best:
+            trainer.save_checkpoint(save_dir / "best.pt")
+            print(f"    New best model saved with val loss: {val_stats['loss']:.4f}")
 
 
 if __name__ == "__main__":
     import argparse
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", choices=["none", "best", "last"], default="none")
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--model", type=str, default="model.json")
+    parser.add_argument("--save-weights", type=str, default="checkpoints")
     args = parser.parse_args()
-    resume = args.resume == "best"
-    main(resume)
+    # configuration
+    config_path = Path(args.model)
+    with open(config_path, "r") as file:
+        model_config = json.load(file)
+    main(model_config, resume_path=args.resume, save_weights_folder=args.save_weights)

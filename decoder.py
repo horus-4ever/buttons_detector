@@ -29,13 +29,21 @@ class Decoder(nn.Module):
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor]):
+    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], att_map_size: tuple, memory_key_padding_mask: Optional[Tensor] = None):
+        B, num_queries, _ = input.shape
         output = input
-        for layer in self.layers:
-            output = layer(output, memory, pos, queries_pos)
+        attn_maps = torch.empty(len(self.layers), B, num_queries, att_map_size[0], att_map_size[1], device=input.device)
+        for i, layer in enumerate(self.layers):
+            output, weights = layer(output, memory, pos, queries_pos, memory_key_padding_mask=memory_key_padding_mask)
+            # attn = weights[0][0]
+            # memory_attention_weights (average=False) --> [B, num_queries, source_size]
+            # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
+            width, height = att_map_size
+            queries_attn_maps = weights.reshape(B, -1, width, height)
+            attn_maps[i] = queries_attn_maps
         # normalize and return
         output = self.norm(output)
-        return output
+        return output, attn_maps
 
 
 class DecoderLayer(nn.Module):
@@ -49,6 +57,7 @@ class DecoderLayer(nn.Module):
     ):
         super().__init__()
         # multihead self-attention layers
+        # batch first --> [B, num_queries, C]
         self.queries_attention = nn.MultiheadAttention(
             embed_dim=d_model,
             num_heads=nheads,
@@ -74,7 +83,8 @@ class DecoderLayer(nn.Module):
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor]):
+    def forward(self, input, memory, pos: Optional[Tensor], queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
+        # # INPUT SHAPE: [B, num_queries, C]
         # computes k and q for queries attention
         k_queries = q_queries = self.with_pos_embed(input, queries_pos)
         # compute self-attention on queries and dropout
@@ -88,8 +98,10 @@ class DecoderLayer(nn.Module):
         k_memory = self.with_pos_embed(memory, pos)
         q_memory = self.with_pos_embed(add_norm_out, queries_pos)
         # compute self-attention
-        memory_attention_out = self.memory_attention(q_memory, k_memory, v_memory)[0]
+        memory_attention_out, memory_attention_weights = self.memory_attention(q_memory, k_memory, v_memory, need_weights=True, average_attn_weights=True, key_padding_mask=memory_key_padding_mask)
         memory_attention_out = self.dropout2(memory_attention_out)
+        # memory_attention_weights (average=False) --> [B, num_queries, source_size]
+        # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
         # add and normalize
         add_norm_out = add_norm_out + memory_attention_out
         add_norm_out = self.norm2(add_norm_out)
@@ -99,4 +111,4 @@ class DecoderLayer(nn.Module):
         # add and normalize
         result = add_norm_out + ffn_out
         result = self.norm3(result)
-        return result
+        return result, memory_attention_weights
