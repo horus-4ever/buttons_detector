@@ -336,6 +336,8 @@ def main(model_config, resume_path=None, save_weights_folder="checkpoints"):
     if resume_path is not None:
         trainer.resume(Path(resume_path))
 
+    return # TODO: remove this line when you want to start the training
+
     num_epochs = model_config["training_parameters"]["num_epochs"]
     start_epoch = trainer.epoch
     for epoch in range(start_epoch, start_epoch + num_epochs):
