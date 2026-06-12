@@ -207,7 +207,9 @@ class DeformableAttention(nn.Module):
     
 
 class MultiscaleDeformableAttention(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, num_levels: int, num_points: int = 4, dropout: float = 0.0):
+    def __init__(self, embed_dim: int, num_heads: int, num_levels: int, num_points: int = 4):
+        if embed_dim % num_heads != 0:
+            raise ValueError("embed_dim must be divisible by num_heads")
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -216,12 +218,32 @@ class MultiscaleDeformableAttention(nn.Module):
         self.num_levels = num_levels
         # linear projections for query, key, and value
         self.v_proj = nn.Linear(embed_dim, embed_dim)
-        self.attention = nn.Linear(embed_dim, num_heads * num_levels * num_points)
+        self.attention_weights = nn.Linear(embed_dim, num_heads * num_levels * num_points) # attention weights are learnable
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         self.sampling_offsets = nn.Linear(embed_dim, num_heads * num_levels * num_points * 2) # learnable offsets for deformable attention
+        # initialize the parameters
+        self._reset_parameters()
 
-    def _rescale_coordinates(self, reference_points, spatial_shapes):
-        pass
+    def _reset_parameters(self):
+        """
+        Initialisation of parameters:
+        - attention_weights: initialized at 0
+        - sampling_offsets: initialized at 0
+        - v_proj: randomly initialized (xavier uniform)
+        - out_proj: randomly initialized (xavier uniform)
+        """
+        nn.init.zeros_(self.attention_weights.weight)
+        nn.init.zeros_(self.attention_weights.bias)
+        nn.init.zeros_(self.sampling_offsets.weight)
+        # TODO: implement a better initialization for sampling_offsets.bias
+        # TODO: having all sampling points referencing the same initial point is probably not good
+        nn.init.zeros_(self.sampling_offsets.bias)
+        # xavier uniform initialization for v_proj and out_proj
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        nn.init.zeros_(self.v_proj.bias)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.weight)
+
 
     def _sample_at_points(self, values, sampling_locations, spatial_shapes, attn_weights):
         """
@@ -230,7 +252,7 @@ class MultiscaleDeformableAttention(nn.Module):
         - spatial_shapes: [num_levels, 2] (height, width)
         - attn_weights: [batch, query_len, heads, num_levels, num_points]
 
-        - sampled_value: [batch, query_len, heads, num_levels, num_points, head_dim]
+        - output: [B, Q, heads, num_levels, head_dim]
 
         We sample points from the value feature map at the locations in sampling_locations.
         For each head, we sample num_points points.
@@ -285,7 +307,7 @@ class MultiscaleDeformableAttention(nn.Module):
         - reference_points: [batch, query_len, num_levels, 2]
 
         - output:       [batch, query_len, embed_dim]
-        - attn_weights: [batch, query_len, heads, num_points]
+        - attn_weights: [batch, query_len, heads, num_levels, num_points]
 
         The values are the concatenation of the feature maps from different levels.
         The `values` tensor is therefore of shape [B, sum_l(Hl~ * Wl~), embed_dim], where Hl~ and Wl~ are the height and width of the feature map at level l.
@@ -302,7 +324,7 @@ class MultiscaleDeformableAttention(nn.Module):
             v = v.masked_fill(key_padding_mask[..., None], 0.0)
         v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2) # [batch, heads, sum_l(Hl~ * Wl~), head_dim]
         # get the attention weights for each query
-        attn_weights = self.attention(query) # [batch, query_len, heads * num_levels * num_points]
+        attn_weights = self.attention_weights(query) # [batch, query_len, heads * num_levels * num_points]
         attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels * self.num_points) # [batch, query_len, heads, num_levels * num_points]
         attn_weights = F.softmax(attn_weights, dim=-1) # [B, Q, heads, num_levels * num_points]
         attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points) # [batch, query_len, heads, num_levels, num_points]
@@ -310,11 +332,11 @@ class MultiscaleDeformableAttention(nn.Module):
         sampling_offsets = self.sampling_offsets(query)
         sampling_offsets = sampling_offsets.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points, 2) # [batch, query_len, heads, num_levels, num_points, 2]
         # get the sampling points by adding the offsets to the reference points
-        spatial_shapes = spatial_shapes.to(device=query.device) # put on the GPU
+        spatial_shapes = spatial_shapes.to(device=query.device, dtype=torch.long) # put on the GPU
         offset_normalizer = torch.stack(
             [spatial_shapes[:, 1], spatial_shapes[:, 0]],
             dim=-1,
-        ) # [num_levels, 2] (width, height) for normalizing the offsets
+        ).to(dtype=query.dtype) # [num_levels, 2] (width, height) for normalizing the offsets
         offset_normalizer = offset_normalizer.to(dtype=query.dtype)
         sampling_locations = reference_points[:, :, None, :, None, :] + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
         output = self._sample_at_points(v, sampling_locations, spatial_shapes, attn_weights) # [B, Q, heads, num_levels, head_dim]
@@ -353,15 +375,14 @@ if __name__ == "__main__":
         embed_dim=C,
         num_heads=num_heads,
         num_levels=num_levels,
-        num_points=num_points,
-        dropout=0.0,
+        num_points=num_points
     )
 
     output, attn_weights, sampling_locations = module(
         reference_points=reference_points,
         spatial_shapes=spatial_shapes,
         query=query,
-        values=values,
+        values=values
     )
 
     print(output.shape)
