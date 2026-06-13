@@ -38,27 +38,39 @@ class DeformableTransformer(nn.Module):
             activation=activation
         )
 
-    def forward(self, feat, query_embed, pos_embed, masks):
+    def forward(self, features, query_embed, pos_embeds, masks):
         """
-        - feat: [B, 256, H~, W~]
-        - query_embed: [num_queries, 256]
-        - pos_embed: [B, 256, H~, W~]
-        - masks: [B, 1, H~, W~]
+        - features: num_levels * [B, embed_dim, Hl, Wl]
+        - query_embed: [num_queries, embed_dim]
+        - pos_embeds: num_levels * [B, embed_dim, Hl, Wl]
+        - masks: num_levels * [B, 1, Hl, Wl]
         """
         # prepare input for encoder
         feat_flatten = []
         mask_flatten = []
         pos_flatten = []
-        for src, mask, pos in zip(feat, masks, pos_embed):
-            # TODO: flatten
-            pass
-        src_flatten = torch.stack(feat_flatten)
-        mask_flatten = torch.stack(mask_flatten)
-        pos_flatten = torch.stack(pos_flatten)
+        spatial_shapes = []
+        for level, (feature_map, mask, positions) in enumerate(zip(features, masks, pos_embeds)):
+            B, Q, H, W = feature_map.size()
+            spatial_shapes.append((H, W))
+            # [B, embed_dim, Hl, Wl] -> [B, embed_dim, Hl * Wl]
+            feature_map = feature_map.view(B, -1, H * W)
+            feat_flatten.append(feature_map)
+            # [B, embed_dim, Hl, Wl] -> [B, embed_dim, Hl * Wl]
+            positions = positions.view(B, -1, H * W)
+            pos_flatten.append(positions)
+            # [B, 1, Hl, Wl] -> [B, 1, Hl * Wl]
+            mask = mask.view(B, -1, H * W)
+            mask_flatten.append(mask)
+        # [B, embed_dim, sum_l(Hl, Wl)]
+        feat_flatten = torch.cat(feat_flatten, dim=2)
+        mask_flatten = torch.cat(mask_flatten, dim=2)
+        pos_flatten = torch.cat(pos_flatten, dim=2)
+        
         # decoder input
         decoder_input = torch.zeros_like(query_embed)
         # forward of encoder
-        memory = self.encoder(feat_flatten, pos_embed, masks)
+        memory = self.encoder(f, p, m)
         # forward of decoder
         # result of shape [B, num_queries, C]
         result, attn_maps = self.decoder(decoder_input, memory, pos=pos_embed, queries_pos=query_embed, att_map_size=(att_height, att_width), memory_key_padding_mask=mask)

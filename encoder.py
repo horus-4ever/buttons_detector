@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import torch
 from utils import FFN
 from typing import Optional
+from attention import MultiscaleDeformableAttention
 
 
 class Encoder(nn.Module):
@@ -50,11 +51,11 @@ class EncoderLayer(nn.Module):
     ):
         super().__init__()
         # multihead self-attention module
-        self.multi_head_self_attention = nn.MultiheadAttention(
+        self.multiscale_deformable_attention = MultiscaleDeformableAttention(
             embed_dim=d_model,
             num_heads=nheads,
-            dropout=dropout,
-            batch_first=True
+            num_levels=4,
+            num_points=4
         )
         # feed-forward network
         self.ffn = FFN(d_model, dim_ffn, dropout, activation=activation)
@@ -67,11 +68,22 @@ class EncoderLayer(nn.Module):
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, input, pos: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, pos_embed: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None):
+        """
+        - input: [batch, sum_l(Hl~ * Wl~), embed_dim]
+        - pos_embed: [batch, sum_l(Hl * Wl), embed_dim]
+        """
         # compute Q and K matrices and apply positional embedding to it
-        q = k = self.with_pos_embed(input, pos)
+        value = self.with_pos_embed(input, pos_embed)
         # compute self-attention and dropout
-        self_att_out = self.multi_head_self_attention(q, k, value=input, key_padding_mask=src_key_padding_mask)[0]
+        # value: [batch, sum_l(Hl~ * Wl~), embed_dim]
+        self_att_out = self.multiscale_deformable_attention(
+            reference_points=, # [batch, query_len, num_levels, 2]
+            spatial_shapes=, # [num_levels, 2]
+            query=, # [batch, query_len, embed_dim]
+            value=value, # [batch, sum_l(Hl~ * Wl~), embed_dim]
+            key_padding_mask=src_key_padding_mask
+        )[0]
         self_att_out = self.dropout1(self_att_out)
         # first add and normalize
         add_norm_out = input + self_att_out
