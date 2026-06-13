@@ -33,7 +33,8 @@ class PRTR(nn.Module):
         self.backbone = nn.Sequential(*list(resnet50(weights=ResNet50_Weights.DEFAULT).children())[:-2])
         # freeze the backbone
         for p in self.backbone.parameters():
-            p.require_grad = False # type: ignore
+            p.requires_grad = False
+        self.backbone.eval()
         # construct the transformer
         self.conv = nn.Conv2d(2048, self.d_model, 1)
         self.transformer = Transformer(
