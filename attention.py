@@ -247,7 +247,7 @@ class MultiscaleDeformableAttention(nn.Module):
 
     def _sample_at_points(self, values, sampling_locations, spatial_shapes, attn_weights):
         """
-        - values: [batch, heads, sum_l(Hl~ * Wl~), head_dim]
+        - values: [batch, heads, sum_l(Hl * Wl), head_dim]
         - sampling_locations: [batch, query_len, heads, num_levels, num_points, 2]
         - spatial_shapes: [num_levels, 2] (height, width)
         - attn_weights: [batch, query_len, heads, num_levels, num_points]
@@ -259,10 +259,10 @@ class MultiscaleDeformableAttention(nn.Module):
         """
         # so we need to do sampling for each level separately
         # we split the values into num_levels parts according to the spatial shapes
-        # [batch, heads, sum_l(Hl~ * Wl~), head_dim] -> [batch, sum_l(Hl~ * Wl~), heads, head_dim]
+        # [batch, heads, sum_l(Hl * Wl), head_dim] -> [batch, sum_l(Hl * Wl), heads, head_dim]
         values = values.transpose(1, 2)
         split_sizes = (spatial_shapes[:, 0] * spatial_shapes[:, 1]).tolist() # [H0~ * W0~, H1~ * W1~, ...]
-        # list of num_levels tensors, each [batch, Hl~ * Wl~, heads, head_dim]
+        # list of num_levels tensors, each [batch, Hl * Wl, heads, head_dim]
         value_list = values.split(split_sizes, dim=1)
         # normalize the sampling locations for the grid_sample in [-1, 1]
         sampling_grids = sampling_locations * 2 - 1
@@ -273,7 +273,7 @@ class MultiscaleDeformableAttention(nn.Module):
             value = value_list[level] # [batch, Hl~ * Wl~, heads, head_dim]
             B, _, H, D = value.size()
             _, Q, _, _, _, _ = sampling_locations.size()
-            # [batch * heads, head_dim, Hl~, Wl~]
+            # [batch * heads, head_dim, Hl, Wl]
             value = value.permute(0, 2, 3, 1).contiguous()
             value = value.view(B * self.num_heads, D, height, width)
             # now we need to do the same for the sampling grid
@@ -302,7 +302,7 @@ class MultiscaleDeformableAttention(nn.Module):
     def forward(self, reference_points, spatial_shapes, query, values, key_padding_mask = None):
         """
         - query: [batch, query_len, embed_dim]
-        - values: [batch, sum_l(Hl~ * Wl~), embed_dim]
+        - values: [batch, sum_l(Hl * Wl), embed_dim]
         - spatial_shapes: [num_levels, 2] (height, width of each feature level)
         - reference_points: [batch, query_len, num_levels, 2]
 
@@ -319,7 +319,7 @@ class MultiscaleDeformableAttention(nn.Module):
         """
         batch_size = query.size(0)
         # project the input value
-        v = self.v_proj(values) # [B, sum_l(Hl~ * Wl~), embed_dim]
+        v = self.v_proj(values) # [B, sum_l(Hl * Wl), embed_dim]
         if key_padding_mask is not None:
             v = v.masked_fill(key_padding_mask[..., None], 0.0)
         v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2) # [batch, heads, sum_l(Hl~ * Wl~), head_dim]
@@ -330,11 +330,12 @@ class MultiscaleDeformableAttention(nn.Module):
         attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points) # [batch, query_len, heads, num_levels, num_points]
         # learned offsets for deformable attention
         sampling_offsets = self.sampling_offsets(query)
-        sampling_offsets = sampling_offsets.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points, 2) # [batch, query_len, heads, num_levels, num_points, 2]
+        # [batch, query_len, heads, num_levels, num_points, 2]
+        sampling_offsets = sampling_offsets.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points, 2)
         # get the sampling points by adding the offsets to the reference points
         spatial_shapes = spatial_shapes.to(device=query.device, dtype=torch.long) # put on the GPU
         offset_normalizer = torch.stack(
-            [spatial_shapes[:, 1], spatial_shapes[:, 0]],
+            [spatial_shapes[:, 0], spatial_shapes[:, 1]],
             dim=-1,
         ).to(dtype=query.dtype) # [num_levels, 2] (width, height) for normalizing the offsets
         offset_normalizer = offset_normalizer.to(dtype=query.dtype)

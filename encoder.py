@@ -11,6 +11,7 @@ class Encoder(nn.Module):
             self,
             d_model: int,
             nheads: int,
+            nlevels: int,
             nlayers: int,
             dim_ffn: int,
             dropout: float = 0.1,
@@ -22,6 +23,7 @@ class Encoder(nn.Module):
             EncoderLayer(
                 d_model=d_model,
                 nheads=nheads,
+                nlevels=nlevels,
                 dim_ffn=dim_ffn,
                 dropout=dropout,
                 activation=activation
@@ -31,10 +33,15 @@ class Encoder(nn.Module):
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, input, pos: Optional[Tensor], src_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, spatial_shapes, pos_embed: Optional[Tensor], src_key_padding_mask: Optional[Tensor] = None):
+        """
+        - input: [batch, sum_l(Hl~ * Wl~), embed_dim]
+        - pos_embed: [batch, sum_l(Hl * Wl), embed_dim]
+        - spatial_shapes: [num_levels, 2]
+        """
         result = input
         for layer in self.encoder_layers:
-            result = layer(result, pos=pos, src_key_padding_mask=src_key_padding_mask)
+            result = layer(result, spatial_shapes, pos_embed=pos_embed, src_key_padding_mask=src_key_padding_mask)
         # normalize
         result = self.norm(result)
         return result
@@ -45,6 +52,7 @@ class EncoderLayer(nn.Module):
             self,
             d_model: int,
             nheads: int,
+            nlevels: int,
             dim_ffn: int,
             dropout: float = 0.1,
             activation: str = "relu"
@@ -54,7 +62,7 @@ class EncoderLayer(nn.Module):
         self.multiscale_deformable_attention = MultiscaleDeformableAttention(
             embed_dim=d_model,
             num_heads=nheads,
-            num_levels=4,
+            num_levels=nlevels,
             num_points=4
         )
         # feed-forward network
@@ -65,22 +73,58 @@ class EncoderLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
+    def _get_reference_points(self, spatial_shapes):
+        """
+        - spatial_shapes: [num_levels, 2]
+
+        - output: [sum_l(Hl * Wl), 2]
+        
+        Reference points are 2D points normalized between 0 and 1.
+        In the encoder, we set one reference point per pixel of each feature map.
+        """
+        # now loop over the layers
+        reference_points = []
+        for _, (H, W) in enumerate(spatial_shapes.tolist()):
+            # now we create the points for this layer using a meshgrid
+            # first, define with linspace the coordonates
+            width_spans = torch.linspace((0.5 / W), (1.0 - 0.5 / W), steps=W)
+            height_spans = torch.linspace((0.5 / H), (1.0 - 0.5 / H), steps=H)
+            i_indices, j_indices = torch.meshgrid(height_spans, width_spans)
+            # i_indices, j_indices: [H, W]
+            # now combine that to obtain the reference points
+            points = torch.stack([i_indices, j_indices]) # [2, H, W]
+            # [2, H, W] -> [H, W, 2]
+            points = points.permute(1, 2, 0).contiguous()
+            # [H * W, 2]
+            points = points.view(H * W, 2)
+            reference_points.append(points)
+        output = torch.cat(reference_points, dim=0) # [sum_l(Hl * Wl), 2]
+        return output
+
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, input, pos_embed: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, spatial_shapes, pos_embed: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [batch, sum_l(Hl~ * Wl~), embed_dim]
+        - spatial_shapes: [num_levels, 2]
         - pos_embed: [batch, sum_l(Hl * Wl), embed_dim]
         """
+        B, Q, C = input.size()
         # compute Q and K matrices and apply positional embedding to it
         value = self.with_pos_embed(input, pos_embed)
+        # get the reference points
+        # [sum_l(Wl * Hl), 2]
+        reference_points = self._get_reference_points(spatial_shapes)
+        # convert the reference points for the multiscale attention
+        # [sum_l(Wl * Hl), 2] -> [B, sum_l(Wl * Hl), num_levels, 2]
+        reference_points = reference_points.expand(B, -1, spatial_shapes.shape[0], -1)
         # compute self-attention and dropout
         # value: [batch, sum_l(Hl~ * Wl~), embed_dim]
         self_att_out = self.multiscale_deformable_attention(
-            reference_points=, # [batch, query_len, num_levels, 2]
-            spatial_shapes=, # [num_levels, 2]
-            query=, # [batch, query_len, embed_dim]
+            reference_points=reference_points, # [B, sum_l(Wl * Hl), num_levels, 2]
+            spatial_shapes=spatial_shapes, # [num_levels, 2]
+            query=self.with_pos_embed(value, pos_embed), # [batch, query_len, embed_dim]
             value=value, # [batch, sum_l(Hl~ * Wl~), embed_dim]
             key_padding_mask=src_key_padding_mask
         )[0]
@@ -99,22 +143,4 @@ class EncoderLayer(nn.Module):
         
 
 if __name__ == "__main__":
-    # test of the layers
-    B = 2        # batch size
-    S = (1024 // 32) ** 2      # number of image tokens = H*W
-    C = 256      # token dimension
-
-    src = torch.randn(B, S, C)   # image features after backbone + 1x1 projection + flatten
-    pos = torch.randn(B, S, C)   # 2D positional encoding
-
-    encoder = Encoder(
-        d_model=256,
-        nheads=8,
-        nlayers=6,
-        dim_ffn=2048,
-        dropout=0.1,
-        activation="relu",
-    )
-
-    memory = encoder(src, pos=pos)   # [B, S, C]
-    print(memory.shape)
+    pass
