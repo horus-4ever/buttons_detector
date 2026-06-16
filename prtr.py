@@ -1,7 +1,5 @@
 import torch
 from torch import nn
-from torchvision.models import resnet50, ResNet50_Weights
-from torchvision.models.feature_extraction import create_feature_extractor
 from transformer import DeformableTransformer
 import torch.nn.functional as F
 from position_encoding import PositionEmbeddingSine2D
@@ -21,6 +19,7 @@ class PRTR(nn.Module):
             n_heads: int = 4,
             n_encoder_layers: int = 3,
             n_decoder_layers: int = 1,
+            n_points: int = 4,
             dim_ffn: int = 512,
             dropout: float = 0.1,
             activation: str = "relu",
@@ -36,11 +35,14 @@ class PRTR(nn.Module):
 
         # freeze the backbone
         for p in self.backbone.parameters():
-            p.require_grad = False # type: ignore
+            p.requires_grad = False
+        # 
         # construct the transformer
         self.transformer = DeformableTransformer(
             d_model=self.d_model,
             nheads=n_heads,
+            nlevels=3,
+            npoints=n_points,
             encoder_nlayers=n_encoder_layers,
             decoder_nlayers=n_decoder_layers,
             dim_ffn=dim_ffn,
@@ -52,24 +54,58 @@ class PRTR(nn.Module):
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
         
+    def _compute_masks(self, masks, feature_maps):
+        """
+        - masks: [B, H_img, W_img]
+        - feature_maps: l * [B, embed_dim, Hl, Wl]
+
+        - output: l * [B, 1, Hl, Wl]
+        """
+        B, H_img, W_img = masks.size()
+        output = []
+        for feature_map in feature_maps:
+            # feature_map: [B, embed_dim, Hl, Wl]
+            _, _, H, W = feature_map.size()
+            height_indices = torch.tensor(torch.round(torch.linspace(0.5 / H, (1.0 - 0.5 / H), H) * H_img), dtype=torch.int, device=feature_map.device)
+            width_indices = torch.tensor(torch.round(torch.linspace(0.5 / W, 1.0 - 0.5 / W, W) * W_img), dtype=torch.int, device=feature_map.device)
+            h_indices, w_indices = torch.meshgrid(height_indices, width_indices, indexing='ij')
+            # [B, Hl, Wl]
+            level_map = masks[:, h_indices, w_indices]
+            # [B, Hl, Wl] -> [B, 1, Hl, Wl]
+            level_map = level_map[:, None, :, :]
+            output.append(level_map)
+        return output
+
 
     def forward(self, inputs, masks):
         """
         - inputs: [B, 3, H_img, W_img]
-        - masks: [B, 1, H_img, W_img] (binary mask containing 1 on padded areas and 0 on non-padded areas)
+        - masks: [B, H_img, W_img] (binary mask containing 1 on padded areas and 0 on non-padded areas)
+
+        Inputs are padded to the maximum batch size.
+        Regarding the masks, we get in input the original image mask.
+        Masks for the extracted multiscale features maps will be derived from the original image mask.
         """
         # inputs: [B, 3, H_img, W_img]
         B, _, H, W = inputs.shape
 
-        # let's call H~ = H/4 and W~ = W/4 for simplicity
-        feature_maps, positions = self.backbone(inputs)          # [B, 256, H~, W~]
         # feature_maps: l * [B, embed_dim, Hl, Wl]
+        feature_maps = self.backbone(inputs)
+        # masks: l * [B, 1, Hl, Wl]
+        multilevel_masks = self._compute_masks(masks, feature_maps)
+
+        position_embeddings = []
+        for mask in multilevel_masks:
+            mask = mask.permute(0, 2, 3, 1).contiguous().squeeze(-1)
+            # [B, embed_dim, Hl, Wl]
+            pos_embed = self.position_embedding(mask)
+            position_embeddings.append(pos_embed)
 
         hs, memory, attn_maps = self.transformer(
-            src=feature_maps,
-            masks=masks,
-            pos_embed=positions,
-            query_embed=self.query_embed.weight
+            features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
+            masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
+            pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
+            query_embed=self.query_embed.weight, # [num_queries, embed_dim]
         )
         
         pred_logits = self.class_head(hs)         # [B, num_queries, num_classes+1]

@@ -299,7 +299,7 @@ class MultiscaleDeformableAttention(nn.Module):
         outputs = torch.stack(outputs, dim=3) # [B, Q, heads, num_levels, head_dim]
         return outputs
 
-    def forward(self, reference_points, spatial_shapes, query, values, key_padding_mask = None):
+    def forward(self, query, reference_points, values, spatial_shapes, key_padding_mask = None):
         """
         - query: [batch, query_len, embed_dim]
         - values: [batch, sum_l(Hl * Wl), embed_dim]

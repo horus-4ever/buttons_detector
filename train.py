@@ -106,7 +106,7 @@ class RandomTrainTransform:
     every sample randomly chooses one resize size from [512, 640, 768, 896].
     """
 
-    def __init__(self, sizes=(512, 640, 768, 896)):
+    def __init__(self, sizes=(512,)):
         self.sizes = sizes
 
     def __call__(self, image, labels):
@@ -155,23 +155,26 @@ def make_val_transform(size: int = 640):
 
 
 def collate_fn(batch):
+    """
+    Padds and computes each image mask for the given batch.
+    """
     images, targets = zip(*batch)
-
+    # get the maximum image size of the batch
     max_h = max(img.shape[1] for img in images)
     max_w = max(img.shape[2] for img in images)
 
     batch_size = len(images)
     channels = images[0].shape[0]
     dtype = images[0].dtype
-
+    # initialize the tensors that will contain the batch
+    # the mask is: 0 means image data ; 1 means padded data (to be ignored)
+    # [B, C, max H, max W]
     padded_images = torch.zeros((batch_size, channels, max_h, max_w), dtype=dtype)
     padding_mask = torch.ones((batch_size, max_h, max_w), dtype=torch.bool)
 
     new_targets = []
-
     for i, (img, tgt) in enumerate(zip(images, targets)):
         _, h, w = img.shape
-
         padded_images[i, :, :h, :w] = img
         padding_mask[i, :h, :w] = False
 

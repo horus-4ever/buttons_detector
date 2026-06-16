@@ -50,7 +50,7 @@ class PositionEmbeddingSine2D(nn.Module):
         pos = torch.cat((pos_y, pos_x), dim=3)   # [B, H, W, 2F]
         pos = pos.permute(0, 3, 1, 2)            # [B, 2F, H, W]
 
-        return pos
+        return pos # [B, 2F, H, W]
     
 
 if __name__ == "__main__":

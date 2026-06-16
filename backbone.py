@@ -54,17 +54,11 @@ class MultiscaleResNet50(nn.Module):
         feat_s8 = self.proj_s8(feat_s8)    # [B, hidden_dim, H/8, W/8]
         feat_s32 = self.proj_s32(feat_s32) # [B, hidden_dim, H/32, W/32]
 
-        spatial_shapes = [
-            (H // 4, W // 4),
-            (H // 8, W // 8),
-            (H // 32, W // 32)
-        ]
-
         features = [
             feat_s4, feat_s8, feat_s32
         ]
 
-        return features, spatial_shapes
+        return features
     
 
 if __name__ == "__main__":

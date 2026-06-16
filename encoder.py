@@ -13,6 +13,7 @@ class Encoder(nn.Module):
             nheads: int,
             nlevels: int,
             nlayers: int,
+            npoints: int,
             dim_ffn: int,
             dropout: float = 0.1,
             activation: str = "relu"
@@ -24,6 +25,7 @@ class Encoder(nn.Module):
                 d_model=d_model,
                 nheads=nheads,
                 nlevels=nlevels,
+                npoints=npoints,
                 dim_ffn=dim_ffn,
                 dropout=dropout,
                 activation=activation
@@ -53,6 +55,7 @@ class EncoderLayer(nn.Module):
             d_model: int,
             nheads: int,
             nlevels: int,
+            npoints: int,
             dim_ffn: int,
             dropout: float = 0.1,
             activation: str = "relu"
@@ -63,7 +66,7 @@ class EncoderLayer(nn.Module):
             embed_dim=d_model,
             num_heads=nheads,
             num_levels=nlevels,
-            num_points=4
+            num_points=npoints,
         )
         # feed-forward network
         self.ffn = FFN(d_model, dim_ffn, dropout, activation=activation)
@@ -109,6 +112,7 @@ class EncoderLayer(nn.Module):
         - input: [batch, sum_l(Hl~ * Wl~), embed_dim]
         - spatial_shapes: [num_levels, 2]
         - pos_embed: [batch, sum_l(Hl * Wl), embed_dim]
+        - src_key_padding_mask: [B, 1, sum_l(Hl, Wl)]
         """
         B, Q, C = input.size()
         # compute Q and K matrices and apply positional embedding to it
@@ -118,16 +122,16 @@ class EncoderLayer(nn.Module):
         reference_points = self._get_reference_points(spatial_shapes)
         # convert the reference points for the multiscale attention
         # [sum_l(Wl * Hl), 2] -> [B, sum_l(Wl * Hl), num_levels, 2]
-        reference_points = reference_points.expand(B, -1, spatial_shapes.shape[0], -1)
+        reference_points = reference_points.unsqueeze(0).unsqueeze(2).expand(B, -1, spatial_shapes.shape[0], 2)
         # compute self-attention and dropout
         # value: [batch, sum_l(Hl~ * Wl~), embed_dim]
-        self_att_out = self.multiscale_deformable_attention(
+        self_att_out, attn_weights, sampling_locations = self.multiscale_deformable_attention(
             reference_points=reference_points, # [B, sum_l(Wl * Hl), num_levels, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query=self.with_pos_embed(value, pos_embed), # [batch, query_len, embed_dim]
-            value=value, # [batch, sum_l(Hl~ * Wl~), embed_dim]
+            values=value, # [batch, sum_l(Hl~ * Wl~), embed_dim]
             key_padding_mask=src_key_padding_mask
-        )[0]
+        )[0] # [B, query_len, embed_dim]
         self_att_out = self.dropout1(self_att_out)
         # first add and normalize
         add_norm_out = input + self_att_out
@@ -138,7 +142,7 @@ class EncoderLayer(nn.Module):
         # second add and normalize
         result = add_norm_out + ffn_out
         result = self.norm2(result)
-        return result
+        return result, attn_weights, sampling_locations
 
         
 

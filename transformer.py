@@ -12,6 +12,8 @@ class DeformableTransformer(nn.Module):
             self,
             d_model: int,
             nheads: int,
+            nlevels: int,
+            npoints: int,
             encoder_nlayers: int,
             decoder_nlayers: int,
             dim_ffn: int,
@@ -23,6 +25,8 @@ class DeformableTransformer(nn.Module):
         self.encoder = Encoder(
             d_model=d_model,
             nheads=nheads,
+            nlevels=nlevels,
+            npoints=npoints,
             nlayers=encoder_nlayers,
             dim_ffn=dim_ffn,
             dropout=dropout,
@@ -32,11 +36,18 @@ class DeformableTransformer(nn.Module):
         self.decoder = Decoder(
             d_model=d_model,
             nheads=nheads,
+            nlevels=nlevels,
+            npoints=npoints,
             nlayers=decoder_nlayers,
             dim_ffn=dim_ffn,
             dropout=dropout,
             activation=activation
         )
+        # level embedding is learned
+        self.level_embed = nn.Parameter(torch.Tensor(nlevels, d_model))
+        # learned reference points
+        # reference points in the decoder are learned from linear projection from object queries
+        self.proj_reference_points = nn.Linear(d_model, 2)
 
     def forward(self, features, query_embed, pos_embeds, masks):
         """
@@ -51,27 +62,50 @@ class DeformableTransformer(nn.Module):
         pos_flatten = []
         spatial_shapes = []
         for level, (feature_map, mask, positions) in enumerate(zip(features, masks, pos_embeds)):
-            B, Q, H, W = feature_map.size()
+            B, _, H, W = feature_map.size()
             spatial_shapes.append((H, W))
             # [B, embed_dim, Hl, Wl] -> [B, embed_dim, Hl * Wl]
             feature_map = feature_map.view(B, -1, H * W)
             feat_flatten.append(feature_map)
+            # level embedding, add them to the position embedding
+            # [embed_dim] -> [1, 1, embed_dim]
+            level_embedding = self.level_embed[level].view(1, 1, -1)
             # [B, embed_dim, Hl, Wl] -> [B, embed_dim, Hl * Wl]
             positions = positions.view(B, -1, H * W)
-            pos_flatten.append(positions)
+            # [B, embed_dim, Hl * Wl] -> [B, Hl * Wl, embed_dim]
+            positions = positions.permute(0, 2, 1).contiguous()
+            pos_flatten.append(positions + level_embedding)
             # [B, 1, Hl, Wl] -> [B, 1, Hl * Wl]
             mask = mask.view(B, -1, H * W)
             mask_flatten.append(mask)
-        # [B, embed_dim, sum_l(Hl, Wl)]
-        feat_flatten = torch.cat(feat_flatten, dim=2)
+        # [B, suml(Hl * Wl), embed_dim]
+        feat_flatten = torch.cat(feat_flatten, dim=2).permute(0, 2, 1).contiguous()
+        # [B, 1, suml(Hl * Wl)]
         mask_flatten = torch.cat(mask_flatten, dim=2)
-        pos_flatten = torch.cat(pos_flatten, dim=2)
-        
+        # [B, suml(Hl * Wl), embed_dim]
+        pos_flatten = torch.cat(pos_flatten, dim=1)
+        # make the spatial shapes be a tensor
+        spatial_shapes = torch.tensor(spatial_shapes, device=query_embed.device)
         # decoder input
         decoder_input = torch.zeros_like(query_embed)
         # forward of encoder
-        memory = self.encoder(f, p, m)
-        # forward of decoder
-        # result of shape [B, num_queries, C]
-        result, attn_maps = self.decoder(decoder_input, memory, pos=pos_embed, queries_pos=query_embed, att_map_size=(att_height, att_width), memory_key_padding_mask=mask)
+        memory, encoder_attention_weights, encoder_sampling_locations = self.encoder(
+            input=feat_flatten, # [batch, sum_l(Hl * Wl), embed_dim]
+            spatial_shapes=spatial_shapes, # [num_levels, 2]
+            pos_embed=pos_flatten, # [B, embed_dim, sum_l(Hl, Wl)]
+            src_key_padding_mask=mask_flatten, # [B, 1, sum_l(Hl, Wl)]
+        ) # [B, sum_l(Hl * Wl), embed_dim]
+
+        # now prepare the input to the decoder
+        object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
+        reference_points = self.proj_reference_points(query_embed) # [num_queries, 2]
+        result, attn_maps = self.decoder(
+            input=object_queries, # [num_queries, embed_dim]
+            memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
+            reference_points=reference_points, # [num_queries, 2]
+            spatial_shapes=spatial_shapes,
+            pos=pos_flatten,
+            queries_pos=query_embed,
+            memory_key_padding_mask=mask_flatten
+        )
         return result, memory, attn_maps
