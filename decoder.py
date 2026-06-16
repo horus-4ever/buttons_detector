@@ -35,24 +35,34 @@ class Decoder(nn.Module):
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, input, memory, reference_points, spatial_shapes, pos: Optional[Tensor], queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
-        B, num_queries, _ = input.shape
-        attn_maps = []
+        """
+        - input: [num_queries, embed_dim]
+        - memory: [B, sum_l(Hl * Wl), embed_dim]
+        - reference_points: [num_queries, 2]
+        - spatial_shapes: [num_levels, 2]
+        - pos: [B, suml(Hl * Wl), embed_dim]
+        - queries_pos: [num_queries, embed_dim]
+        - memory_key_padding_mask: [B, 1, suml(Hl * Wl)]
+        """
+        decoder_attn_weights = []
+        decoder_sampling_locations = []
         # loop over the decoder layers
         output = input
-        for i, layer in enumerate(self.layers):
-            output, weights, sampling_locations = layer(
-                input=output, 
-                memory=memory, 
+        for layer in self.layers:
+            output, attn_weights, sampling_locations = layer(
+                input=output,
+                memory=memory,
                 reference_points=reference_points,
                 spatial_shapes=spatial_shapes,
                 pos=pos,
                 queries_pos=queries_pos,
                 memory_key_padding_mask=memory_key_padding_mask
             )
-            # TODO: redo the forward of this
+            decoder_attn_weights.append(attn_weights)
+            decoder_sampling_locations.append(sampling_locations)
         # normalize and return
         output = self.norm(output)
-        return output, attn_maps
+        return output, decoder_attn_weights, decoder_sampling_locations
 
 
 class DecoderLayer(nn.Module):
@@ -67,6 +77,7 @@ class DecoderLayer(nn.Module):
             activation: str = "relu"
     ):
         super().__init__()
+        self.num_levels = nlevels
         # multihead self-attention layers
         self.queries_attention = nn.MultiheadAttention(
             embed_dim=d_model,
@@ -98,8 +109,12 @@ class DecoderLayer(nn.Module):
         """
         - input: [B, num_queries, embed_dim]
         - memory: [B, query_len, embed_dim]
+        - reference_points: [query_len, 2]
         - pos: [B, num_queries, embed_dim]
+        - queries_pos: [num_queries, embed_dim]
+        - memory_key_padding_mask: 
         """
+        B, Q, C = input.size()
         # computes k and q for queries attention
         k_queries = q_queries = self.with_pos_embed(input, queries_pos)
         # compute self-attention on queries and dropout
@@ -109,19 +124,24 @@ class DecoderLayer(nn.Module):
         add_norm_out = input + queries_attention_out
         add_norm_out = self.norm1(add_norm_out)
         # computes v, k and q for memory attention
-        v_memory = memory
+        v_memory = memory # [B, query_len, embed_dim]
+        # [num_queries, embed_dim]
         q_memory = self.with_pos_embed(add_norm_out, queries_pos)
+        # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
+        q_memory = q_memory.expand(B, Q, C)
+        # resize the reference_points to the right size
+        # [query_len, 2] -> [batch, query_len, num_levels, 2]
+        reference_points = reference_points[None, :, None, :].expand(B, Q, self.num_levels, 2)
         # compute self-attention
         memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.memory_attention(
-            query=q_memory,
-            reference_points=reference_points,
-            values=v_memory,
-            spatial_shapes=spatial_shapes,
-            key_padding_mask=memory_key_padding_mask
+            query=q_memory, # [B, num_queries, embed_dim]
+            reference_points=reference_points, # [query_len, 2] # TODO: must be [batch, query_len, num_levels, 2]
+            values=v_memory, # [B, query_len, embed_dim]
+            spatial_shapes=spatial_shapes, # [num_levels, 2]
+            key_padding_mask=memory_key_padding_mask, # 
         )
+        # [B, query_len, embed_dim]
         memory_attention_out = self.dropout2(memory_attention_out)
-        # memory_attention_weights (average=False) --> [B, num_queries, source_size]
-        # memory_attention_weights (average=True) --> [B, num_heads, num_queries, source_size]
         # add and normalize
         add_norm_out = add_norm_out + memory_attention_out
         add_norm_out = self.norm2(add_norm_out)

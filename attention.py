@@ -321,8 +321,13 @@ class MultiscaleDeformableAttention(nn.Module):
         # project the input value
         v = self.v_proj(values) # [B, sum_l(Hl * Wl), embed_dim]
         if key_padding_mask is not None:
-            v = v.masked_fill(key_padding_mask[..., None], 0.0)
-        v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2) # [batch, heads, sum_l(Hl~ * Wl~), head_dim]
+            # [B, sum_l(Hl * Wl), embed_dim] -> # [B, embed_dim, sum_l(Hl * Wl)]
+            v = v.transpose(1, 2)
+            v = v.masked_fill(key_padding_mask, 0.0)
+        # [B, embed_dim, sum_l(Hl * Wl)] -> [B, sum_l(Hl~ * Wl~), heads, head_dim]
+        v = v.view(batch_size, -1, self.num_heads, self.head_dim)
+        # [B, sum_l(Hl~ * Wl~), heads, head_dim] -> [B, heads, sum_l(Hl~ * Wl~), head_dim]
+        v = v.transpose(1, 2)
         # get the attention weights for each query
         attn_weights = self.attention_weights(query) # [batch, query_len, heads * num_levels * num_points]
         attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels * self.num_points) # [batch, query_len, heads, num_levels * num_points]

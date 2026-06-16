@@ -156,7 +156,9 @@ def run_model(
     width, height = image.size
 
     x = preprocess_image(image, inference_size).to(device)
-    outputs = model(x)
+    # [B, H_img, W_img]
+    masks = torch.zeros([1, height, width], dtype=torch.bool)
+    outputs = model(x, masks)
 
     if "pred_logits" not in outputs:
         raise KeyError("Model output is missing 'pred_logits'.")
@@ -296,59 +298,10 @@ def normalize_attention_maps(attn_maps, num_queries: int, batch_idx: int = 0) ->
     """
     Converts common attention shapes into [Q, Hf, Wf].
 
-    Supported examples:
-      [Q, Hf, Wf]
-      [Q, heads, Hf, Wf]
-      [heads, Q, Hf, Wf]
-      [B, Q, Hf, Wf]
-      [B, heads, Q, Hf, Wf]
-      [B, Q, heads, Hf, Wf]
-      [L, B, heads, Q, Hf, Wf]
-      [L, B, Q, heads, Hf, Wf]
-      [Q, S] where S is square
+    - attn_maps: [batch, query_len, heads, num_levels, num_points]
     """
-    attn = _last_tensor(attn_maps)
-
-    # [L, B, heads, Q, H, W] or [L, B, Q, heads, H, W]
-    if attn.ndim == 6:
-        attn = attn[-1]  # final layer -> [B, heads, Q, H, W] or [B, Q, heads, H, W]
-
-    # [B, heads, Q, H, W] or [B, Q, heads, H, W]
-    if attn.ndim == 5:
-        if attn.shape[0] != num_queries:
-            attn = attn[min(batch_idx, attn.shape[0] - 1)]
-        else:
-            # Rare case: [Q, something, something, H, W].
-            # Average the second dimension if needed below.
-            pass
-
-    # [Q, heads, H, W], [heads, Q, H, W], or [B, Q, H, W]
-    if attn.ndim == 4:
-        if attn.shape[0] == num_queries:
-            # [Q, heads, H, W]
-            attn = attn.mean(dim=1)
-        elif attn.shape[1] == num_queries:
-            # [heads, Q, H, W] or [B, Q, H, W]
-            attn = attn.mean(dim=0)
-        else:
-            # Last fallback: average leading dimension.
-            attn = attn.mean(dim=0)
-
-    # [Q, H, W]
-    if attn.ndim == 3:
-        if attn.shape[0] != num_queries:
-            raise ValueError(
-                f"Expected normalized attention shape [Q, H, W] with Q={num_queries}, "
-                f"got {tuple(attn.shape)}."
-            )
-        return attn
-
-    # [Q, S]
-    if attn.ndim == 2:
-        return _reshape_flat_attention(attn, num_queries)
-
-    raise ValueError(f"Unsupported attention map shape: {tuple(attn.shape)}.")
-
+    attn_map = attn_maps[0] # [query_len, heads, num_levels, num_points]
+    
 
 def minmax_normalize_map(attn_map: torch.Tensor) -> torch.Tensor:
     attn_map = attn_map.float()
@@ -369,6 +322,9 @@ def visualize_attention(
     predictions: list[QueryPrediction],
     output_path: Path,
 ):
+    """
+    - attn_maps: [batch, query_len, heads, num_levels, num_points]
+    """
     num_queries = len(predictions)
     query_maps = normalize_attention_maps(attn_maps, num_queries=num_queries)  # [Q, Hf, Wf]
 
@@ -497,7 +453,7 @@ def visualize_one(
             attn_path = output_dir / f"{name}_attention.png"
             visualize_attention(
                 image=image,
-                attn_maps=infer.attn_maps,
+                attn_maps=infer.attn_maps, # [batch, query_len, heads, num_levels, num_points]
                 predictions=infer.predictions,
                 output_path=attn_path,
             )
@@ -601,6 +557,9 @@ def main():
 
     if not model_weights_path.exists():
         raise FileNotFoundError(f"Model weights not found: {model_weights_path}")
+
+    model_config_path = Path("model.json")
+    model_weights_path = Path("checkpoints/best.pt")
 
     model = load_model(
         model_config_path=model_config_path,

@@ -42,11 +42,15 @@ class Encoder(nn.Module):
         - spatial_shapes: [num_levels, 2]
         """
         result = input
+        encoder_attn_weights = []
+        encoder_sampling_locations = []
         for layer in self.encoder_layers:
-            result = layer(result, spatial_shapes, pos_embed=pos_embed, src_key_padding_mask=src_key_padding_mask)
+            result, attn_weights, sampling_locations = layer(result, spatial_shapes, pos_embed=pos_embed, src_key_padding_mask=src_key_padding_mask)
+            encoder_attn_weights.append(attn_weights)
+            encoder_sampling_locations.append(sampling_locations)
         # normalize
         result = self.norm(result)
-        return result
+        return result, encoder_attn_weights, encoder_sampling_locations
 
 
 class EncoderLayer(nn.Module):
@@ -131,7 +135,8 @@ class EncoderLayer(nn.Module):
             query=self.with_pos_embed(value, pos_embed), # [batch, query_len, embed_dim]
             values=value, # [batch, sum_l(Hl~ * Wl~), embed_dim]
             key_padding_mask=src_key_padding_mask
-        )[0] # [B, query_len, embed_dim]
+        )
+        # [B, query_len, embed_dim]
         self_att_out = self.dropout1(self_att_out)
         # first add and normalize
         add_norm_out = input + self_att_out

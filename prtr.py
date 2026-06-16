@@ -115,7 +115,7 @@ class PRTR(nn.Module):
             "pred_logits": pred_logits,
             "pred_buttons": pred_buttons,
             "memory": memory,
-            "attn_maps": attn_maps,
+            "attn_maps": attn_maps, # [batch, query_len, heads, num_levels, num_points]
             "image_size": (H, W)
         }
 
