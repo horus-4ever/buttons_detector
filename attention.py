@@ -235,14 +235,24 @@ class MultiscaleDeformableAttention(nn.Module):
         nn.init.zeros_(self.attention_weights.weight)
         nn.init.zeros_(self.attention_weights.bias)
         nn.init.zeros_(self.sampling_offsets.weight)
-        # TODO: implement a better initialization for sampling_offsets.bias
-        # TODO: having all sampling points referencing the same initial point is probably not good
-        nn.init.zeros_(self.sampling_offsets.bias)
+        # TODO: implement radial initialization as in the original deformable DETR
+        # nn.init.zeros_(self.sampling_offsets.bias)
+        thetas = torch.arange(self.num_heads, dtype=torch.float32) * (
+            2.0 * math.pi / self.num_heads
+        ) # we have here 4 attention heads, so it will here define the directions along the y and x axis
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], dim=-1)
+        grid_init = grid_init / grid_init.abs().max(dim=-1, keepdim=True)[0]
+        grid_init = grid_init.view(self.num_heads, 1, 1, 2)
+        grid_init = grid_init.repeat(1, self.num_levels, self.num_points, 1)
+        for i in range(self.num_points):
+            grid_init[:, :, i, :] *= i + 1
+        with torch.no_grad():
+            self.sampling_offsets.bias.copy_(grid_init.reshape(-1))
         # xavier uniform initialization for v_proj and out_proj
         nn.init.xavier_uniform_(self.v_proj.weight)
         nn.init.zeros_(self.v_proj.bias)
         nn.init.xavier_uniform_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
 
     def _sample_at_points(self, values, sampling_locations, spatial_shapes, attn_weights):
@@ -321,13 +331,15 @@ class MultiscaleDeformableAttention(nn.Module):
         # project the input value
         v = self.v_proj(values) # [B, sum_l(Hl * Wl), embed_dim]
         if key_padding_mask is not None:
-            # [B, sum_l(Hl * Wl), embed_dim] -> # [B, embed_dim, sum_l(Hl * Wl)]
-            v = v.transpose(1, 2)
-            v = v.masked_fill(key_padding_mask, 0.0)
-        # [B, embed_dim, sum_l(Hl * Wl)] -> [B, sum_l(Hl~ * Wl~), heads, head_dim]
+            if key_padding_mask.dim() == 3:
+                key_padding_mask = key_padding_mask.squeeze(1)
+            key_padding_mask = key_padding_mask.to(torch.bool)
+            v = v.masked_fill(key_padding_mask[..., None], 0.0)
         v = v.view(batch_size, -1, self.num_heads, self.head_dim)
-        # [B, sum_l(Hl~ * Wl~), heads, head_dim] -> [B, heads, sum_l(Hl~ * Wl~), head_dim]
+        # [B, heads, sum_l(Hl~ * Wl~), head_dim]
         v = v.transpose(1, 2)
+
+
         # get the attention weights for each query
         attn_weights = self.attention_weights(query) # [batch, query_len, heads * num_levels * num_points]
         attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels * self.num_points) # [batch, query_len, heads, num_levels * num_points]
@@ -352,51 +364,3 @@ class MultiscaleDeformableAttention(nn.Module):
         output = output.view(batch_size, -1, self.embed_dim)
         output = self.out_proj(output) # [B, Q, embed_dim]
         return output, attn_weights, sampling_locations
-
-
-
-
-if __name__ == "__main__":
-    B = 2
-    Q = 7
-    C = 64
-    num_heads = 8
-    num_levels = 3
-    num_points = 4
-
-    spatial_shapes = torch.tensor([
-        [8, 8],
-        [4, 4],
-        [2, 2],
-    ])
-
-    total_tokens = int((spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum())
-
-    query = torch.randn(B, Q, C, requires_grad=True)
-    values = torch.randn(B, total_tokens, C, requires_grad=True)
-
-    reference_points = torch.rand(B, Q, num_levels, 2)
-
-    module = MultiscaleDeformableAttention(
-        embed_dim=C,
-        num_heads=num_heads,
-        num_levels=num_levels,
-        num_points=num_points
-    )
-
-    output, attn_weights, sampling_locations = module(
-        reference_points=reference_points,
-        spatial_shapes=spatial_shapes,
-        query=query,
-        values=values
-    )
-
-    print(output.shape)
-    print(attn_weights.shape)
-    print(sampling_locations.shape)
-
-    loss = output.sum()
-    loss.backward()
-
-    print(query.grad is not None)
-    print(values.grad is not None)

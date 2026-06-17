@@ -10,13 +10,10 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from torchvision import transforms
+from mpl_toolkits.axes_grid1 import ImageGrid
 
 from prtr import build_model_from
 
-
-# ------------------------------------------------------------
-# Config
-# ------------------------------------------------------------
 
 DATASET_ROOT = Path("dataset")
 IMAGES_DIR = DATASET_ROOT / "images"
@@ -34,94 +31,41 @@ INFERENCE_SIZE = 512
 BUTTON_CLASS_ID = 0
 
 
-# ------------------------------------------------------------
-# Data structures
-# ------------------------------------------------------------
-
-@dataclass(frozen=True)
-class QueryPrediction:
-    query_idx: int
+@dataclass
+class Prediction:
     class_id: int
-    class_score: float
-    button_score: float
-    xy_norm: tuple[float, float]
-    xy_px: tuple[float, float]
+    pos_x: float
+    pos_y: float
+    confidence: float
 
-    @property
-    def is_button(self) -> bool:
-        return self.class_id == BUTTON_CLASS_ID
-
-
-@dataclass(frozen=True)
-class InferenceResult:
-    predictions: list[QueryPrediction]
-    pred_logits: torch.Tensor
-    pred_buttons: torch.Tensor
-    pred_probs: torch.Tensor
-    attn_maps: Optional[torch.Tensor | list | tuple]
-    raw_outputs: dict
-
-
-# ------------------------------------------------------------
-# Model loading
-# ------------------------------------------------------------
 
 def load_model(model_config_path: str | Path, model_weights_path: str | Path, device: torch.device):
     model = build_model_from(str(model_config_path))
-
     checkpoint = torch.load(model_weights_path, map_location=device)
-
     if "model_state_dict" not in checkpoint:
         raise KeyError(
             f"Checkpoint does not contain 'model_state_dict'. "
             f"Available keys: {list(checkpoint.keys())}"
         )
-
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
-
     return model
 
 
-# ------------------------------------------------------------
-# Image IO
-# ------------------------------------------------------------
 
-def resolve_image_path(name_or_path: str | Path) -> Path:
-    p = Path(name_or_path)
-
-    if p.exists():
-        if not p.is_file():
-            raise FileNotFoundError(f"Expected an image file, got directory: {p}")
-        return p
-
-    image_path = IMAGES_DIR / f"{name_or_path}.png"
-
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image not found: {image_path}")
-
-    return image_path
-
-
-def load_image(name_or_path: str | Path) -> tuple[Image.Image, Path]:
-    image_path = resolve_image_path(name_or_path)
+def load_image(path: Path) -> Image.Image:
+    image_path = path
     image = Image.open(image_path).convert("RGB")
-    return image, image_path
+    return image
 
 
 def iter_image_files(directory: Path) -> list[Path]:
     image_files: list[Path] = []
-
     for ext in ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.webp"):
         image_files.extend(sorted(directory.glob(ext)))
-
     return sorted(image_files)
 
-
-# ------------------------------------------------------------
-# Preprocessing
-# ------------------------------------------------------------
 
 def preprocess_image(image: Image.Image, inference_size: int) -> torch.Tensor:
     transform = transforms.Compose([
@@ -132,13 +76,8 @@ def preprocess_image(image: Image.Image, inference_size: int) -> torch.Tensor:
             std=[0.229, 0.224, 0.225],
         ),
     ])
-
     return transform(image).unsqueeze(0)
 
-
-# ------------------------------------------------------------
-# Prediction helpers
-# ------------------------------------------------------------
 
 def normalized_to_pixel_xy(xy: torch.Tensor, width: int, height: int) -> tuple[float, float]:
     x = float(xy[0]) * width
@@ -147,258 +86,122 @@ def normalized_to_pixel_xy(xy: torch.Tensor, width: int, height: int) -> tuple[f
 
 
 @torch.no_grad()
-def run_model(
-    model,
-    image: Image.Image,
-    device: torch.device,
-    inference_size: int,
-) -> InferenceResult:
+def run_model(model, image: Image.Image, device: torch.device, inference_size: int):
     width, height = image.size
-
     x = preprocess_image(image, inference_size).to(device)
-    # [B, H_img, W_img]
+    # masks: [B, H_img, W_img]
     masks = torch.zeros([1, height, width], dtype=torch.bool)
     outputs = model(x, masks)
+    return outputs
 
-    if "pred_logits" not in outputs:
-        raise KeyError("Model output is missing 'pred_logits'.")
 
-    if "pred_buttons" not in outputs:
-        raise KeyError("Model output is missing 'pred_buttons'.")
-
+def get_predictions(image, outputs):
+    width, height = image.size
+    # put on the CPU, and we have only one batch
     pred_logits = outputs["pred_logits"][0].detach().cpu()      # [Q, C + 1]
     pred_buttons = outputs["pred_buttons"][0].detach().cpu()    # [Q, 2]
-
-    pred_probs = pred_logits.softmax(dim=-1)
+    # transforms to probabilities
+    pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
     pred_classes = pred_probs.argmax(dim=-1)
     pred_scores = pred_probs.max(dim=-1).values
-
-    predictions: list[QueryPrediction] = []
-
-    for query_idx in range(pred_logits.shape[0]):
+    # now loop over the queries and get the predictions
+    num_queries, num_classes = pred_logits.size()
+    predictions = []
+    for query_idx in range(num_queries):
         class_id = int(pred_classes[query_idx])
-        class_score = float(pred_scores[query_idx])
-        button_score = float(pred_probs[query_idx, BUTTON_CLASS_ID])
-
+        confidence = float(pred_probs[query_idx, BUTTON_CLASS_ID])
         xy_norm_tensor = pred_buttons[query_idx]
-        xy_px = normalized_to_pixel_xy(xy_norm_tensor, width, height)
+        pos_x, pos_y = normalized_to_pixel_xy(xy_norm_tensor, width, height)
+        predictions.append(Prediction(class_id, pos_x, pos_y, confidence))
+    return predictions
 
-        predictions.append(
-            QueryPrediction(
-                query_idx=query_idx,
-                class_id=class_id,
-                class_score=class_score,
-                button_score=button_score,
-                xy_norm=(float(xy_norm_tensor[0]), float(xy_norm_tensor[1])),
-                xy_px=xy_px,
+
+def get_attention_maps(attn_weights):
+    """
+    - attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
+
+    - output: [query_len, heads, num_levels, num_points]
+    Keeps only the last decoder layer attention weights.
+    """
+    attn_weights = attn_weights[-1][0] # get the attention weigths of the last decoder layer, first image
+    return attn_weights
+
+
+def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predictions) -> list[Image.Image]:
+    """
+    - attn_maps: [query_len, heads, num_levels, num_points]
+    - spatial_shapes: [num_levels, 2]
+    - sampling_locations: [batch, query_len, heads, num_levels, num_points, 2]
+    """
+    image = image.convert("L").convert("RGBA")
+    W_img, H_img = image.size
+    num_queries, num_heads, num_levels, num_points = attn_maps.size()
+    # --> [query_len, heads, num_levels, num_points, 2]
+    sampling_locations = sampling_locations[0] # first image of the batch
+    # flatten that
+    sampling_locations = sampling_locations.reshape(num_queries, -1, 2)
+    attn_maps = attn_maps.reshape(num_queries, -1)
+    # loop over the queries to have each attention per query
+    query_attn_maps_images = []
+    for attn_map, locations, prediction in zip(attn_maps, sampling_locations, predictions):
+        # draw the attention
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        image_draw = ImageDraw.Draw(overlay)
+        for (posy, posx), value in zip(locations, attn_map):
+            px = float(posx * W_img)
+            py = float(posy * H_img)
+            alpha = int(40 + 215 * float(value))
+            radius = 5
+            image_draw.ellipse(
+                (px - radius, py - radius, px + radius, py + radius),
+                fill=(255, 0, 0, alpha),
             )
-        )
-
-    return InferenceResult(
-        predictions=predictions,
-        pred_logits=pred_logits,
-        pred_buttons=pred_buttons,
-        pred_probs=pred_probs,
-        attn_maps=outputs.get("attn_maps"),
-        raw_outputs=outputs,
-    )
-
-
-def selected_button_predictions(
-    predictions: Iterable[QueryPrediction],
-    min_button_score: Optional[float] = None,
-) -> list[QueryPrediction]:
-    selected = [p for p in predictions if p.is_button]
-
-    if min_button_score is not None:
-        selected = [p for p in selected if p.button_score >= min_button_score]
-
-    return selected
-
-
-# ------------------------------------------------------------
-# Drawing
-# ------------------------------------------------------------
-
-def draw_button_predictions(
-    image: Image.Image,
-    predictions: list[QueryPrediction],
-    radius: int = 8,
-    color: str = "red",
-) -> Image.Image:
-    image = image.copy()
-    draw = ImageDraw.Draw(image)
-
-    for pred in predictions:
-        x, y = pred.xy_px
-
-        draw.ellipse(
-            (x - radius, y - radius, x + radius, y + radius),
-            outline=color,
-            width=3,
-        )
-
-        # draw.line((x - radius, y, x + radius, y), fill=color, width=2)
-        # draw.line((x, y - radius, x, y + radius), fill=color, width=2)
-
-        label = f"q{pred.query_idx} {pred.button_score:.2f}"
-        draw.text((x + 8, y + 8), label, fill=color)
-
-    return image
-
-
-# ------------------------------------------------------------
-# Attention map handling
-# ------------------------------------------------------------
-
-def _last_tensor(x):
-    """
-    Handles attention outputs that may be tensors, lists, or tuples.
-    Uses the final decoder layer when the model returns a stack/list.
-    """
-    while isinstance(x, (list, tuple)):
-        if len(x) == 0:
-            raise ValueError("Attention map list/tuple is empty.")
-        x = x[-1]
-
-    if not isinstance(x, torch.Tensor):
-        raise TypeError(f"Unsupported attention map type: {type(x)}")
-
-    return x.detach().cpu()
-
-
-def _reshape_flat_attention(attn: torch.Tensor, num_queries: int) -> torch.Tensor:
-    """
-    Converts flattened attention [Q, S] into [Q, H, W] when S is square.
-    """
-    if attn.ndim != 2:
-        raise ValueError(f"Expected flattened attention with shape [Q, S], got {tuple(attn.shape)}.")
-
-    if attn.shape[0] != num_queries:
-        if attn.shape[1] == num_queries:
-            attn = attn.T
-        else:
-            raise ValueError(
-                f"Cannot identify query dimension in flattened attention shape {tuple(attn.shape)}."
+        # then draw the predictions
+        if prediction.class_id == BUTTON_CLASS_ID:
+            x, y = prediction.pos_x, prediction.pos_y
+            radius = 10
+            image_draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                fill=(0, 255, 0, 255)
             )
-
-    spatial_tokens = attn.shape[1]
-    side = math.isqrt(spatial_tokens)
-
-    if side * side != spatial_tokens:
-        raise ValueError(
-            f"Flattened attention has {spatial_tokens} spatial tokens, which is not square. "
-            f"Cannot infer [H, W] automatically."
-        )
-
-    return attn.reshape(num_queries, side, side)
+        attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
+        query_attn_maps_images.append(attn_map_image)
+    return query_attn_maps_images
 
 
-def normalize_attention_maps(attn_maps, num_queries: int, batch_idx: int = 0) -> torch.Tensor:
-    """
-    Converts common attention shapes into [Q, Hf, Wf].
-
-    - attn_maps: [batch, query_len, heads, num_levels, num_points]
-    """
-    attn_map = attn_maps[0] # [query_len, heads, num_levels, num_points]
-    
-
-def minmax_normalize_map(attn_map: torch.Tensor) -> torch.Tensor:
-    attn_map = attn_map.float()
-
-    min_val = attn_map.min()
-    max_val = attn_map.max()
-
-    denom = max_val - min_val
-    if float(denom) < 1e-8:
-        return torch.zeros_like(attn_map)
-
-    return (attn_map - min_val) / denom
-
-
-def visualize_attention(
-    image: Image.Image,
-    attn_maps,
-    predictions: list[QueryPrediction],
-    output_path: Path,
-):
-    """
-    - attn_maps: [batch, query_len, heads, num_levels, num_points]
-    """
-    num_queries = len(predictions)
-    query_maps = normalize_attention_maps(attn_maps, num_queries=num_queries)  # [Q, Hf, Wf]
-
-    width, height = image.size
-
-    button_query_ids = {p.query_idx for p in predictions if p.is_button}
-    prediction_by_query = {p.query_idx: p for p in predictions}
-
-    ncols = 5
-    nrows = math.ceil(num_queries / ncols)
-
-    figure, axes = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(4 * ncols, 4 * nrows),
-        squeeze=False,
-    )
-
-    grayscale_image = image.convert("L")
-
-    for i in range(nrows * ncols):
-        row = i // ncols
-        col = i % ncols
-        ax = axes[row][col]
-
-        if i >= num_queries:
-            ax.axis("off")
+def visualize_predictions(image: Image.Image, predictions):
+    W, H = image.size
+    result_image= image.copy()
+    blackboard = ImageDraw.Draw(result_image)
+    for prediction in predictions:
+        if prediction.class_id != BUTTON_CLASS_ID:
             continue
-
-        pred = prediction_by_query[i]
-        is_button_query = i in button_query_ids
-
-        attn_map = query_maps[i].unsqueeze(0).unsqueeze(0)
-
-        attn_map = F.interpolate(
-            attn_map,
-            size=(height, width),
-            mode="bilinear",
-            align_corners=False,
-        )[0, 0]
-
-        attn_map = minmax_normalize_map(attn_map).numpy()
-
-        if is_button_query:
-            ax.imshow(image)
-            ax.imshow(attn_map, cmap="jet", alpha=0.35)
-
-            x, y = pred.xy_px
-            ax.scatter([x], [y], marker="x", s=120, linewidths=4, color="#00ff00")
-
-            title = f"Query {i} | BUTTON | p={pred.button_score:.2f}"
-        else:
-            ax.imshow(grayscale_image, cmap="gray")
-            ax.imshow(attn_map, cmap="gray", alpha=0.45)
-
-            title = f"Query {i} | class {pred.class_id} | unused"
-
-        ax.set_title(title)
-        ax.axis("off")
-
-    figure.suptitle("Decoder attention maps", fontsize=20)
-    figure.tight_layout()
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, bbox_inches="tight")
-    plt.close(figure)
+        x, y = prediction.pos_x, prediction.pos_y
+        radius = 5
+        blackboard.ellipse(
+            (x - radius, y - radius, x + radius, y + radius),
+            fill=(0, 255, 0, 255)
+        )
+    return result_image
 
 
-# ------------------------------------------------------------
-# Main visualization
-# ------------------------------------------------------------
+def create_plot(images):
+    fig = plt.figure(figsize=(5, 2))
+    images = [img.resize((512, 512)) for img in images]
+    # Create an ImageGrid with a custom padding (axes_pad) in inches
+    grid = ImageGrid(fig, 111,          # similar to subplot(111)
+                    nrows_ncols=(2, 5), # 2x2 grid
+                    axes_pad=0.1,       # pad between images
+                    )
+
+    for ax, img in zip(grid, images):
+        ax.imshow(img)
+        ax.axis('off')
+    plt.show()
+
 
 def visualize_one(
-    name_or_path: str | Path,
+    path: Path,
     model,
     output_dir: Path,
     device: torch.device,
@@ -406,59 +209,21 @@ def visualize_one(
     save_attention_maps: bool = True,
     min_button_score: Optional[float] = None,
 ):
-    image, image_path = load_image(name_or_path)
-    name = image_path.stem
+    image = load_image(path)
+    image_name = path.stem
 
-    infer = run_model(
-        model=model,
-        image=image,
-        device=device,
-        inference_size=inference_size,
-    )
-
-    button_predictions = selected_button_predictions(
-        infer.predictions,
-        min_button_score=min_button_score,
-    )
-
-    print(f"\nImage: {image_path}")
-    print(f"Predicted button queries: {len(button_predictions)}")
-
-    for pred in button_predictions:
-        x_px, y_px = pred.xy_px
-        x_norm, y_norm = pred.xy_norm
-
-        print(
-            f"  query {pred.query_idx}: "
-            f"x={x_px:.1f}, y={y_px:.1f} | "
-            f"x_norm={x_norm:.4f}, y_norm={y_norm:.4f} | "
-            f"button_score={pred.button_score:.3f}"
-        )
-
-    vis = draw_button_predictions(
-        image=image,
-        predictions=button_predictions,
-    )
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    vis_path = output_dir / f"{name}_predictions.png"
-    vis.save(vis_path)
-    print(f"Saved prediction visualization to: {vis_path}")
-
-    if save_attention_maps:
-        if infer.attn_maps is None:
-            print("No attention maps found in model output; skipping attention visualization.")
-        else:
-            attn_path = output_dir / f"{name}_attention.png"
-            visualize_attention(
-                image=image,
-                attn_maps=infer.attn_maps, # [batch, query_len, heads, num_levels, num_points]
-                predictions=infer.predictions,
-                output_path=attn_path,
-            )
-            print(f"Saved attention visualization to: {attn_path}")
-
+    outputs = run_model(model, image, device, inference_size)
+    # get the predictions
+    predictions = get_predictions(image, outputs)
+    print(len(list(filter(lambda p: p.class_id == BUTTON_CLASS_ID, predictions))))
+    # normalize the attention maps
+    # [query_len, heads, num_levels, num_points], where query_len = 10
+    attn_maps = get_attention_maps(outputs["attn_maps"])
+    # get the spatial shapes and then visualize the attention
+    spatial_shapes = outputs["spatial_shapes"]
+    sampling_locations = outputs["sampling_locations"]
+    attn_images = visualize_attention(image, attn_maps, sampling_locations, predictions)
+    attn_images = create_plot(attn_images)
 
 def visualize_directory(
     directory: Path,
@@ -476,7 +241,7 @@ def visualize_directory(
 
     for image_path in image_files:
         visualize_one(
-            name_or_path=image_path,
+            path=image_path,
             model=model,
             output_dir=output_dir,
             device=device,
@@ -581,7 +346,7 @@ def main():
         )
     else:
         visualize_one(
-            name_or_path=args.input,
+            path=args.input,
             model=model,
             output_dir=args.output_dir,
             device=DEVICE,

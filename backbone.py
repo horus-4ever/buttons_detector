@@ -43,7 +43,7 @@ class MultiscaleResNet50(nn.Module):
 
         - output: (features l * [B, embed_dim, Hl, Wl], spatial_shapes l * [2])
         """
-        B, C, W, H = x.size()
+        B, C, H, W = x.size()
         features = self.body(x)
 
         feat_s4 = features["feat_s4"]      # [B, 256,  H/4,  W/4]
@@ -59,10 +59,3 @@ class MultiscaleResNet50(nn.Module):
         ]
 
         return features
-    
-
-if __name__ == "__main__":
-    model = MultiscaleResNet50()
-    input = torch.rand(3 * 256 * 256).view(1, 3, 256, 256)
-    f4, f8, f32 = model(input)
-    print(f4.size(), f8.size(), f32.size())

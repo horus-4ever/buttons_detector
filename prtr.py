@@ -34,9 +34,9 @@ class PRTR(nn.Module):
         self.backbone = MultiscaleResNet50(hidden_dim=self.d_model)
 
         # freeze the backbone
-        for p in self.backbone.parameters():
+        for p in self.backbone.body.parameters():
             p.requires_grad = False
-        # 
+            
         # construct the transformer
         self.transformer = DeformableTransformer(
             d_model=self.d_model,
@@ -101,21 +101,22 @@ class PRTR(nn.Module):
             pos_embed = self.position_embedding(mask)
             position_embeddings.append(pos_embed)
 
-        hs, memory, attn_maps = self.transformer(
+        hs, decoder_attn_maps, spatial_shapes, decoder_sampling_locations = self.transformer(
             features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
             query_embed=self.query_embed.weight, # [num_queries, embed_dim]
         )
-        
-        pred_logits = self.class_head(hs)         # [B, num_queries, num_classes+1]
+        # hs: [B, query_len, embed_dim]
+        pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
         pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 2]
 
         return {
             "pred_logits": pred_logits,
             "pred_buttons": pred_buttons,
-            "memory": memory,
-            "attn_maps": attn_maps, # [batch, query_len, heads, num_levels, num_points]
+            "attn_maps": decoder_attn_maps, # decoder_layers * [batch, query_len, heads, num_levels, num_points]
+            "sampling_locations": decoder_sampling_locations, # [batch, query_len, heads, num_levels, num_points, 2]
+            "spatial_shapes": spatial_shapes, # [num_levels, 2]
             "image_size": (H, W)
         }
 
@@ -129,13 +130,3 @@ def build_model_from(json_path: str):
         model_name = data["model_name"]
         parameters = data["parameters"]
         return PRTR(model_name, **parameters)
-
-
-if __name__ == "__main__":    
-    model = PRTR("test_model")
-    dummy_input = torch.randn(2, 3, 256, 192)
-    outputs = model(dummy_input)
-    print(outputs["pred_logits"].shape)  # Expected: [B, num_queries, num_classes+1]
-    print(outputs["pred_buttons"].shape)  # Expected: [B, num_queries, 2]
-    print(outputs["memory"].shape)        # Expected: [B, C, H, W]
-    print(len(outputs["attn_maps"]))      # Expected: number of attention maps returned by the transformer

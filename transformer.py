@@ -45,6 +45,7 @@ class DeformableTransformer(nn.Module):
         )
         # level embedding is learned
         self.level_embed = nn.Parameter(torch.Tensor(nlevels, d_model))
+        nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
         self.proj_reference_points = nn.Linear(d_model, 2)
@@ -101,14 +102,15 @@ class DeformableTransformer(nn.Module):
         object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
         reference_points = self.proj_reference_points(query_embed) # [num_queries, 2]
+        reference_points = reference_points.sigmoid() # let them be into 0 and 1
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
             reference_points=reference_points, # [num_queries, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
-            pos=pos_flatten, # [B, suml(Hl * Wl), embed_dim]
             queries_pos=query_embed, # [num_queries, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
-        # decoder_attn_maps: [batch, query_len, heads, num_levels, num_points]
-        return result, memory, decoder_attn_maps
+        # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
+        # result: [B, query_len, embed_dim]
+        return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations

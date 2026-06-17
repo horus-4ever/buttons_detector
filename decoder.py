@@ -34,7 +34,7 @@ class Decoder(nn.Module):
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, input, memory, reference_points, spatial_shapes, pos: Optional[Tensor], queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, memory, reference_points, spatial_shapes, queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [num_queries, embed_dim]
         - memory: [B, sum_l(Hl * Wl), embed_dim]
@@ -54,12 +54,12 @@ class Decoder(nn.Module):
                 memory=memory,
                 reference_points=reference_points,
                 spatial_shapes=spatial_shapes,
-                pos=pos,
                 queries_pos=queries_pos,
                 memory_key_padding_mask=memory_key_padding_mask
             )
             decoder_attn_weights.append(attn_weights)
             decoder_sampling_locations.append(sampling_locations)
+        # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
         # normalize and return
         output = self.norm(output)
         return output, decoder_attn_weights, decoder_sampling_locations
@@ -105,12 +105,11 @@ class DecoderLayer(nn.Module):
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, input, memory, reference_points, spatial_shapes, pos: Optional[Tensor], queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, memory, reference_points, spatial_shapes, queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [B, num_queries, embed_dim]
         - memory: [B, query_len, embed_dim]
         - reference_points: [query_len, 2]
-        - pos: [B, num_queries, embed_dim]
         - queries_pos: [num_queries, embed_dim]
         - memory_key_padding_mask: 
         """
@@ -135,11 +134,12 @@ class DecoderLayer(nn.Module):
         # compute self-attention
         memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.memory_attention(
             query=q_memory, # [B, num_queries, embed_dim]
-            reference_points=reference_points, # [query_len, 2] # TODO: must be [batch, query_len, num_levels, 2]
+            reference_points=reference_points, # [query_len, 2]
             values=v_memory, # [B, query_len, embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             key_padding_mask=memory_key_padding_mask, # 
         )
+        # memory_attention_weights: [batch, query_len, heads, num_levels, num_points]
         # [B, query_len, embed_dim]
         memory_attention_out = self.dropout2(memory_attention_out)
         # add and normalize

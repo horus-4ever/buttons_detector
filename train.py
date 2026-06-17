@@ -54,7 +54,7 @@ class ButtonDataset(Dataset):
         width = ann["width"]
         height = ann["height"]
 
-        img_path = self.images_dir / f"{name}.png"
+        img_path = self.images_dir / f"{name}.jpg"
         if not img_path.exists():
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
 
@@ -62,7 +62,7 @@ class ButtonDataset(Dataset):
         coords = []
 
         for b in buttons:
-            center = b["center"]
+            center = b # ["center"]
             if "x_ndc" in center and "y_ndc" in center:
                 x = float(center["x_ndc"])
                 y = 1.0 - float(center["y_ndc"])
