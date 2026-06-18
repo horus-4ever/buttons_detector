@@ -21,7 +21,7 @@ IMAGES_DIR = DATASET_ROOT / "images"
 CHECKPOINT_DIR = Path("good_runs")
 OUTPUT_DIR = Path("viz_outputs")
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cpu" if torch.cuda.is_available() else "cpu")
 
 INFERENCE_SIZE = 512
 
@@ -197,7 +197,7 @@ def create_plot(images):
     for ax, img in zip(grid, images):
         ax.imshow(img)
         ax.axis('off')
-    plt.show()
+    return fig
 
 
 def visualize_one(
@@ -223,7 +223,11 @@ def visualize_one(
     spatial_shapes = outputs["spatial_shapes"]
     sampling_locations = outputs["sampling_locations"]
     attn_images = visualize_attention(image, attn_maps, sampling_locations, predictions)
-    attn_images = create_plot(attn_images)
+    fig = create_plot(attn_images)
+    fig.savefig(Path(f"visualize/{image_name}_attn.png"), dpi=300)
+    # now save the whole image
+    img_predictions = visualize_predictions(image, predictions)
+    img_predictions.save(Path(f"visualize/{image_name}_pred.png"))
 
 def visualize_directory(
     directory: Path,
@@ -317,14 +321,14 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
+    model_config_path = Path("model.json")
+    model_weights_path = Path("checkpoints/best.pt")
+
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")
 
     if not model_weights_path.exists():
         raise FileNotFoundError(f"Model weights not found: {model_weights_path}")
-
-    model_config_path = Path("model.json")
-    model_weights_path = Path("checkpoints/best.pt")
 
     model = load_model(
         model_config_path=model_config_path,

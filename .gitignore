@@ -5,6 +5,7 @@ dataset/
 dataset_finetune/
 good_runs/
 viz_outputs/
+visualize/
 tests/
 model.json
 *.pth
