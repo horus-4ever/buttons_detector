@@ -144,10 +144,12 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
     # loop over the queries to have each attention per query
     query_attn_maps_images = []
     for attn_map, locations, prediction in zip(attn_maps, sampling_locations, predictions):
+        if prediction.class_id != BUTTON_CLASS_ID:
+            continue
         # draw the attention
         overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
         image_draw = ImageDraw.Draw(overlay)
-        for (posy, posx), value in zip(locations, attn_map):
+        for (posx, posy), value in zip(locations, attn_map):
             px = float(posx * W_img)
             py = float(posy * H_img)
             alpha = int(40 + 215 * float(value))
@@ -322,7 +324,7 @@ def main():
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
     model_config_path = Path("model.json")
-    model_weights_path = Path("checkpoints/best.pt")
+    model_weights_path = Path("checkpoints/last.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")

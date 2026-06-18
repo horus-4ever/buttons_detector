@@ -39,10 +39,6 @@ class AddNorm(nn.Module):
         return self.norm_layer(input + add_target)
 
 
-import torch
-from torch import nn
-
-
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super().__init__()
@@ -61,7 +57,6 @@ class MLP(nn.Module):
         return x
 
 
-
 def _get_activation_fn(name: str):
     match name:
         case "relu":
@@ -70,3 +65,12 @@ def _get_activation_fn(name: str):
             return F.gelu
         case _:
             return F.relu
+        
+
+def inverse_sigmoid(x, eps=1e-6):
+    """
+    Converts a probability back into a real number.
+    Value is clamped to avoid overflows.
+    """
+    x = x.clamp(min=eps, max=1.0 - eps)
+    return torch.log(x / (1.0 - x))

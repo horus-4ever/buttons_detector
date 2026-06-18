@@ -4,14 +4,9 @@ from transformer import DeformableTransformer
 import torch.nn.functional as F
 from position_encoding import PositionEmbeddingSine2D
 from backbone import MultiscaleResNet50
-from utils import MLP
+from utils import MLP, inverse_sigmoid
 from pathlib import Path
 import json
-
-
-def inverse_sigmoid(x, eps=1e-6):
-    x = x.clamp(min=eps, max=1.0 - eps)
-    return torch.log(x / (1.0 - x))
 
 
 class PRTR(nn.Module):
