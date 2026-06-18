@@ -87,8 +87,6 @@ class DeformableTransformer(nn.Module):
         pos_flatten = torch.cat(pos_flatten, dim=1)
         # make the spatial shapes be a tensor
         spatial_shapes = torch.tensor(spatial_shapes, device=query_embed.device)
-        # decoder input
-        decoder_input = torch.zeros_like(query_embed)
         # forward of encoder
         memory, encoder_attention_weights, encoder_sampling_locations = self.encoder(
             input=feat_flatten, # [batch, sum_l(Hl * Wl), embed_dim]
@@ -113,4 +111,4 @@ class DeformableTransformer(nn.Module):
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
         # result: [B, query_len, embed_dim]
-        return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations
+        return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points

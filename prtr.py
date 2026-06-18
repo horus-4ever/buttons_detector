@@ -9,6 +9,11 @@ from pathlib import Path
 import json
 
 
+def inverse_sigmoid(x, eps=1e-6):
+    x = x.clamp(min=eps, max=1.0 - eps)
+    return torch.log(x / (1.0 - x))
+
+
 class PRTR(nn.Module):
     def __init__(
             self,
@@ -101,7 +106,7 @@ class PRTR(nn.Module):
             pos_embed = self.position_embedding(mask)
             position_embeddings.append(pos_embed)
 
-        hs, decoder_attn_maps, spatial_shapes, decoder_sampling_locations = self.transformer(
+        hs, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points = self.transformer(
             features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
@@ -109,7 +114,8 @@ class PRTR(nn.Module):
         )
         # hs: [B, query_len, embed_dim]
         pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
-        pred_buttons = self.button_head(hs).sigmoid()  # [B, num_queries, 2]
+        button_deltas = self.button_head(hs)
+        pred_buttons = (inverse_sigmoid(reference_points) + button_deltas).sigmoid()  # [B, num_queries, 2]
 
         return {
             "pred_logits": pred_logits,
@@ -117,6 +123,7 @@ class PRTR(nn.Module):
             "attn_maps": decoder_attn_maps, # decoder_layers * [batch, query_len, heads, num_levels, num_points]
             "sampling_locations": decoder_sampling_locations, # [batch, query_len, heads, num_levels, num_points, 2]
             "spatial_shapes": spatial_shapes, # [num_levels, 2]
+            "reference_points": reference_points,
             "image_size": (H, W)
         }
 
