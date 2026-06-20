@@ -50,6 +50,23 @@ class DeformableTransformer(nn.Module):
         # reference points in the decoder are learned from linear projection from object queries
         self.proj_reference_points = nn.Linear(d_model, 2)
 
+    def _get_reference_points(self, memory, num_queries, spatial_shapes):
+        """
+        - memory: [B, sum_l(Hl * Wl), embed_dim]
+
+        We get a heat map of the memory.
+        We then apply a top-k algorithm to get num_queries locations.
+        """
+        B, _, _ = memory.size()
+        indices = (spatial_shapes[:, 0] * spatial_shapes[:, 1]).tolist()
+        # now split the reference points
+        reference_points = self.proj_reference_points(memory) # [B, sum_l(Hl * Wl), 2]
+        ref_point_levels = memory.split(indices) # l * [B, Hl * Wl, embed_dim]
+        for ref_point_level, (H, W) in zip(ref_point_levels, spatial_shapes):
+            ref_point_level = ref_point_level.permutate(0, 2, 1).contiguous() # [B, embed_dim, Hl * Wl]
+            values, indices = torch.topk(reference_points, k=num_queries)
+        
+
     def forward(self, features, query_embed, pos_embeds, masks):
         """
         - features: num_levels * [B, embed_dim, Hl, Wl]
@@ -99,8 +116,8 @@ class DeformableTransformer(nn.Module):
         # now prepare the input to the decoder
         object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        reference_points = self.proj_reference_points(query_embed) # [num_queries, 2]
-        reference_points = reference_points.sigmoid() # let them be into 0 and 1
+        # get reference_points from encoder memory as a first guess
+        reference_points = self._get_reference_points(memory, object_queries.size()[0], spatial_shapes)
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
