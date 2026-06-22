@@ -109,7 +109,7 @@ class DecoderLayer(nn.Module):
         """
         - input: [B, num_queries, embed_dim]
         - memory: [B, query_len, embed_dim]
-        - reference_points: [query_len, 2]
+        - reference_points: [query_len, 4]
         - queries_pos: [num_queries, embed_dim]
         - memory_key_padding_mask: 
         """
@@ -129,12 +129,12 @@ class DecoderLayer(nn.Module):
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         q_memory = q_memory.expand(B, Q, C)
         # resize the reference_points to the right size
-        # [query_len, 2] -> [batch, query_len, num_levels, 2]
-        reference_points = reference_points[None, :, None, :].expand(B, Q, self.num_levels, 2)
+        # [query_len, 4] -> [batch, query_len, num_levels, 4]
+        reference_points = reference_points[None, :, None, :].expand(B, Q, self.num_levels, 4)
         # compute self-attention
         memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.memory_attention(
             query=q_memory, # [B, num_queries, embed_dim]
-            reference_points=reference_points, # [query_len, 2]
+            reference_points=reference_points, # [query_len, 4]
             values=v_memory, # [B, query_len, embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             key_padding_mask=memory_key_padding_mask, # 

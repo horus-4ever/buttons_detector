@@ -48,7 +48,8 @@ class DeformableTransformer(nn.Module):
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
-        self.proj_reference_points = nn.Linear(d_model, 2)
+        # for pair detection, we will try to have 2 points per reference point, so 4 points in total
+        self.proj_reference_points = nn.Linear(d_model, 4)
 
     def forward(self, features, query_embed, pos_embeds, masks):
         """
@@ -99,12 +100,12 @@ class DeformableTransformer(nn.Module):
         # now prepare the input to the decoder
         object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        reference_points = self.proj_reference_points(query_embed) # [num_queries, 2]
+        reference_points = self.proj_reference_points(query_embed) # [num_queries, 4]
         reference_points = reference_points.sigmoid() # let them be into 0 and 1
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # [num_queries, 2]
+            reference_points=reference_points, # [num_queries, 4]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             queries_pos=query_embed, # [num_queries, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]

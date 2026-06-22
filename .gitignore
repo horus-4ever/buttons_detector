@@ -6,6 +6,7 @@ dataset_finetune/
 good_runs/
 viz_outputs/
 visualize/
+converter/script_tests
 tests/
 model.json
 *.pth
