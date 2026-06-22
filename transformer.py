@@ -48,7 +48,7 @@ class DeformableTransformer(nn.Module):
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
-        self.proj_reference_points = nn.Linear(d_model, 2)
+        self.proj_reference_points = nn.Linear(d_model, 1)
 
     def _get_reference_points(self, memory, num_queries, spatial_shapes):
         """
@@ -59,12 +59,41 @@ class DeformableTransformer(nn.Module):
         """
         B, _, _ = memory.size()
         indices = (spatial_shapes[:, 0] * spatial_shapes[:, 1]).tolist()
+        # get the maximum height and maximum width
+        max_height, max_width = spatial_shapes[0] # the maximum is the first element of the tensor
         # now split the reference points
-        reference_points = self.proj_reference_points(memory) # [B, sum_l(Hl * Wl), 2]
-        ref_point_levels = memory.split(indices) # l * [B, Hl * Wl, embed_dim]
-        for ref_point_level, (H, W) in zip(ref_point_levels, spatial_shapes):
-            ref_point_level = ref_point_level.permutate(0, 2, 1).contiguous() # [B, embed_dim, Hl * Wl]
-            values, indices = torch.topk(reference_points, k=num_queries)
+        memory_maps = self.proj_reference_points(memory) # [B, sum_l(Hl * Wl), 1]
+        memory_maps = memory_maps.split(indices, dim=1) # l * [B, Hl * Wl, 1]
+        # loop over memory maps and interpolate them to the highest dimension
+        all_memory_maps = []
+        for memory_map, (H, W) in zip(memory_maps, spatial_shapes):
+            memory_map = memory_map.permute(0, 2, 1).contiguous() # [B, 1, Hl * Wl]
+            memory_map = memory_map.view(B, -1, H, W)
+            # now interpolate the value to the largest
+            memory_map_interpolated = F.interpolate(
+                memory_map,
+                size=(max_height, max_width),
+                mode="bilinear",
+                align_corners=False
+            )
+            # get to [B, 1, MH * MW]
+            memory_map_interpolated = memory_map_interpolated.view(B, -1, max_height * max_width)
+            all_memory_maps.append(memory_map_interpolated)
+        # l * [B, 1, MH * MW] -> [B, 1, n_levels, MH * MW]
+        all_memory_maps = torch.stack(all_memory_maps, dim=2) # stack on last dimension (the common one)
+        # [B, 1, n_levels, MH * MW] -> [B, 1, MH * MW]
+        summed_memory_maps = all_memory_maps.sum(dim=2) # sum on last dimension
+        # [B, 1, MH * MW] -> [B, MH * MW]
+        summed_memory_maps = summed_memory_maps.squeeze(dim=1)
+        values, indices = torch.topk(summed_memory_maps, k=num_queries)
+        # indices: [B, num_queries]
+        # now take the H and W indices and normalize them
+        H_indices = (0.5 + (indices // max_width).float()) / max_height
+        W_indices = (0.5 + (indices % max_width).float()) / max_width
+        # we have the reference points here
+        reference_points = torch.stack([H_indices, W_indices], dim=-1)
+        # [B, num_queries, 2]
+        return reference_points
         
 
     def forward(self, features, query_embed, pos_embeds, masks):
@@ -115,13 +144,13 @@ class DeformableTransformer(nn.Module):
         B, Q, C = memory.size()
         # now prepare the input to the decoder
         object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
-        object_queries = object_queries.expand(B, -1, -1)
+        object_queries = object_queries.expand(B, -1, -1) # [B, num_queries, embed_dim]
         # get reference_points from encoder memory as a first guess
-        reference_points = self._get_reference_points(memory, object_queries.size()[0], spatial_shapes)
+        reference_points = self._get_reference_points(memory, object_queries.size()[1], spatial_shapes)
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # [num_queries, 2]
+            reference_points=reference_points, # [B, num_queries, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             queries_pos=query_embed, # [num_queries, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
