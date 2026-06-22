@@ -475,9 +475,9 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
             # now we need to do the same for the sampling grid
             sampling_grid = sampling_grids[:, :, :, level, :, :] # [batch, query_len, heads, num_points, RpQ, 2]
             # [batch, query_len, heads, num_points, RpQ, 2]
-            # -> [batch, heads, RpQ, query_len, num_points, 2]
-            # -> [batch * heads * RpQ, query_len, num_points, 2]
-            grid = sampling_grid.permute(0, 2, 4, 1, 3, 5).contiguous()
+            # -> [batch, RpQ, heads, query_len, num_points, 2]
+            # -> [batch * RpQ * heads, query_len, num_points, 2]
+            grid = sampling_grid.permute(0, 4, 2, 1, 3, 5).contiguous()
             grid = grid.view(B * self.num_heads * self.num_ref_points_per_query, -1, self.num_points, 2)
             # now sample the values at the sampling locations using grid_sample
             sampled_value = F.grid_sample(value, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
@@ -527,10 +527,19 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         # [B, heads, sum_l(Hl~ * Wl~), head_dim]
         v = v.transpose(1, 2)
         # get the attention weights for each query
-        attn_weights = self.attention_weights(query) # [batch, query_len, heads * num_levels * num_points * RpQ]
-        attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels * self.num_points) # [batch, query_len, heads, num_levels * num_points * RpQ]
-        attn_weights = F.softmax(attn_weights, dim=-1) # [B, Q, heads, num_levels * num_points * RpQ]
-        attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points, self.num_ref_points_per_query) # [batch, query_len, heads, num_levels, num_points, RpQ]
+        # [batch, query_len, heads * num_levels * num_points * RpQ]
+        attn_weights = self.attention_weights(query)
+        # [batch, query_len, heads * num_levels * num_points * RpQ] -> [batch, query_len, heads, num_levels, num_points, RpQ]
+        attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points, self.num_ref_points_per_query)
+        # [batch, query_len, heads, num_levels, num_points, RpQ] -> [batch, query_len, heads, RpQ, num_levels, num_points]
+        attn_weights = attn_weights.permute(0, 1, 2, 5, 3, 4).contiguous()
+        # [batch, query_len, heads, RpQ, num_levels, num_points] -> [batch, query_len, heads, RpQ, num_levels * num_points]
+        attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_ref_points_per_query, self.num_levels * self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=-1) # [B, Q, heads, RpQ, num_levels * num_points]
+        # [B, Q, heads, RpQ, num_levels * num_points] -> [batch, query_len, heads, RpQ, num_levels, num_points]
+        attn_weights = attn_weights.view(batch_size, -1, self.num_heads, self.num_ref_points_per_query, self.num_levels, self.num_points)
+        # [batch, query_len, heads, RpQ, num_levels, num_points] -> [batch, query_len, heads, num_levels, num_points, RpQ]
+        attn_weights = attn_weights.permute(0, 1, 2, 4, 5, 3).contiguous()
         # learned offsets for deformable attention
         sampling_offsets = self.sampling_offsets(query)
         # [batch, query_len, heads, num_levels, num_points, RpQ, 2]
@@ -548,7 +557,7 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         # [B, Q, heads, num_levels, RpQ, head_dim] -> [B, Q, heads, RpQ, head_dim]
         output = output.sum(dim=3) # sum over the levels
         # [B, Q, heads, RpQ, head_dim] -> [B, Q, heads, head_dim]
-        output = output.sum(dim=3) # sum over the reference points per query
+        output = output.mean(dim=3) # take the mean of the reference points per query
         # [B, Q, heads, head_dim] -> [B, Q, embed_dim]
         output = output.view(batch_size, -1, self.embed_dim)
         output = self.out_proj(output) # [B, Q, embed_dim]

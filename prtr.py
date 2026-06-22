@@ -20,6 +20,7 @@ class PRTR(nn.Module):
             n_encoder_layers: int = 3,
             n_decoder_layers: int = 1,
             n_points: int = 4,
+            nrefpointsperquery: int = 2,
             dim_ffn: int = 512,
             dropout: float = 0.1,
             activation: str = "relu",
@@ -43,7 +44,7 @@ class PRTR(nn.Module):
             nheads=n_heads,
             nlevels=3,
             npoints=n_points,
-            nrefpointsperquery=2,
+            nrefpointsperquery=nrefpointsperquery,
             encoder_nlayers=n_encoder_layers,
             decoder_nlayers=n_decoder_layers,
             dim_ffn=dim_ffn,
@@ -55,7 +56,7 @@ class PRTR(nn.Module):
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # we now have 4 points as an output as we are now trying to detect the button pairs
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2 * 2, mlp_num_layers)
+        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2 * nrefpointsperquery, mlp_num_layers)
         
     def _compute_masks(self, masks, feature_maps):
         """
@@ -112,12 +113,15 @@ class PRTR(nn.Module):
         )
         # hs: [B, query_len, embed_dim]
         # reference_points: [query_len, RpQ, 2]
+        Q, num_ref_points_per_query, _ = reference_points.size()
         pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
         # [B, query_len, 2 * RpQ]
         button_deltas = self.button_head(hs)
-        print(button_deltas.size(), reference_points.size()) ; exit(0)
-        # here now we have to predict for 4 points
-        pred_buttons = (inverse_sigmoid(reference_points) + button_deltas).sigmoid()  # [B, num_queries, 4]
+        # print(button_deltas.size(), reference_points.size())
+        button_deltas = button_deltas.view(B, Q, num_ref_points_per_query, 2)
+        # print(button_deltas.size(), reference_points.size()) ; exit(0)
+        # here now we have to predict for 2 * RpQ points
+        pred_buttons = (inverse_sigmoid(reference_points) + button_deltas).sigmoid()  # [B, num_queries, RpQ, 2]
 
         return {
             "pred_logits": pred_logits,
