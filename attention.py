@@ -464,6 +464,7 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
             value = value_list[level] # [batch, Hl~ * Wl~, heads, head_dim]
             B, _, H, D = value.size()
             _, Q, _, _, _, _, _ = sampling_locations.size()
+            # IMPORTANT (value): order of flatten: B, RqP, heads 
             # [batch, Hl~ * Wl~, heads, head_dim]
             # -> [batch, 1, Hl~ * Wl~, heads, head_dim]
             # -> [batch, RpQ, Hl~ * Wl~, heads, head_dim]
@@ -483,10 +484,11 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
             sampled_value = F.grid_sample(value, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
             # sampled_value: [B * heads * RpQ, head_dim, query_len, num_points]
             # we need to reshape it back to [B, query_len, heads, num_points, RpQ, head_dim]
-            # [B * heads * RpQ, head_dim, query_len, num_points] -> [B, heads, RpQ, head_dim, query_len, num_points]
-            sampled_value = sampled_value.view(B, self.num_heads, self.num_ref_points_per_query, D, Q, self.num_points)
-            # [B, heads, RpQ, head_dim, query_len, num_points] -> [B, query_len, heads, num_points, RpQ, head_dim]
-            sampled_value = sampled_value.permute(0, 4, 1, 5, 2, 3).contiguous()
+            # IMPORTANT (sampled_value): order of deflatten (same as `value`): B, heads, RqP
+            # [B * heads * RpQ, head_dim, query_len, num_points] -> [B, RpQ, heads, head_dim, query_len, num_points]
+            sampled_value = sampled_value.view(B, self.num_ref_points_per_query, self.num_heads, D, Q, self.num_points)
+            # [B, RpQ, heads, head_dim, query_len, num_points] -> [B, query_len, heads, num_points, RpQ, head_dim]
+            sampled_value = sampled_value.permute(0, 4, 2, 5, 1, 3).contiguous()
             # now apply the attention weights
             attn_weight = attn_weights[:, :, :, level, :, :] # [B, query_len, heads, num_points, RpQ]
             output = sampled_value * attn_weight[..., None] # [B, Q, heads, num_points, RpQ, head_dim]
@@ -561,4 +563,5 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         # [B, Q, heads, head_dim] -> [B, Q, embed_dim]
         output = output.view(batch_size, -1, self.embed_dim)
         output = self.out_proj(output) # [B, Q, embed_dim]
+        # TODO: think about if the output should not be instead just a [B, Q, RpQ, embed_dim] instead (maybe better for prediction afterwards)
         return output, attn_weights, sampling_locations
