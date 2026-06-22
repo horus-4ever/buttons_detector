@@ -7,6 +7,9 @@ good_runs/
 viz_outputs/
 tests/
 model.json
+yolo-models/
+visualize/
+converter/script_tests/
 *.pth
 *.pt
 
