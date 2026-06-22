@@ -14,6 +14,7 @@ class DeformableTransformer(nn.Module):
             nheads: int,
             nlevels: int,
             npoints: int,
+            nrefpointsperquery: int,
             encoder_nlayers: int,
             decoder_nlayers: int,
             dim_ffn: int,
@@ -38,6 +39,7 @@ class DeformableTransformer(nn.Module):
             nheads=nheads,
             nlevels=nlevels,
             npoints=npoints,
+            nrefpointsperquery=nrefpointsperquery,
             nlayers=decoder_nlayers,
             dim_ffn=dim_ffn,
             dropout=dropout,
@@ -48,8 +50,8 @@ class DeformableTransformer(nn.Module):
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
-        # for pair detection, we will try to have 2 points per reference point, so 4 points in total
-        self.proj_reference_points = nn.Linear(d_model, 4)
+        # we now learn 2 points, so 4 values per query
+        self.proj_reference_points = nn.Linear(d_model, 2 * nrefpointsperquery)
 
     def forward(self, features, query_embed, pos_embeds, masks):
         """
@@ -100,12 +102,14 @@ class DeformableTransformer(nn.Module):
         # now prepare the input to the decoder
         object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        reference_points = self.proj_reference_points(query_embed) # [num_queries, 4]
+        reference_points = self.proj_reference_points(query_embed) # [query_len, 4]
+        # [query_len, RpQ * 2] -> # [query_len, RpQ, 2]
+        reference_points = reference_points.view(reference_points.size()[0], -1, 2)
         reference_points = reference_points.sigmoid() # let them be into 0 and 1
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # [num_queries, 4]
+            reference_points=reference_points, # [query_len, RpQ, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             queries_pos=query_embed, # [num_queries, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]

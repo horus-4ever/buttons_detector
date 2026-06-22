@@ -387,9 +387,6 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         """
         if embed_dim % num_heads != 0:
             raise ValueError("embed_dim must be divisible by num_heads")
-        # n reference points, so n * 2 values
-        if num_ref_points_per_query % 2 != 0:
-            raise ValueError("The number of reference points per query must be divisible by 2")
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -416,8 +413,8 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         nn.init.zeros_(self.attention_weights.weight)
         nn.init.zeros_(self.attention_weights.bias)
         nn.init.zeros_(self.sampling_offsets.weight)
-        # TODO: implement radial initialization as in the original deformable DETR
-        # nn.init.zeros_(self.sampling_offsets.bias)
+        # TODO: do proper initialization
+        """
         thetas = torch.arange(self.num_heads, dtype=torch.float32) * (
             2.0 * math.pi / self.num_heads
         ) # we have here 4 attention heads, so it will here define the directions along the y and x axis
@@ -429,6 +426,8 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
             grid_init[:, :, i, :] *= i + 1
         with torch.no_grad():
             self.sampling_offsets.bias.copy_(grid_init.reshape(-1))
+        """
+        nn.init.uniform_(self.sampling_offsets.bias)
         # xavier uniform initialization for v_proj and out_proj
         nn.init.xavier_uniform_(self.v_proj.weight)
         nn.init.zeros_(self.v_proj.bias)
@@ -456,6 +455,7 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         # list of num_levels tensors, each [batch, Hl * Wl, heads, head_dim]
         value_list = values.split(split_sizes, dim=1)
         # normalize the sampling locations for the grid_sample in [-1, 1]
+        # [batch, query_len, heads, num_levels, num_points, RpQ, 2]
         sampling_grids = sampling_locations * 2 - 1
 
         outputs = []
@@ -463,31 +463,38 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         for level, (height, width) in enumerate(spatial_shapes.tolist()):
             value = value_list[level] # [batch, Hl~ * Wl~, heads, head_dim]
             B, _, H, D = value.size()
-            _, Q, _, _, _, _ = sampling_locations.size()
-            # [batch * heads, head_dim, Hl, Wl]
-            value = value.permute(0, 2, 3, 1).contiguous()
-            value = value.view(B * self.num_heads, D, height, width)
+            _, Q, _, _, _, _, _ = sampling_locations.size()
+            # [batch, Hl~ * Wl~, heads, head_dim]
+            # -> [batch, 1, Hl~ * Wl~, heads, head_dim]
+            # -> [batch, RpQ, Hl~ * Wl~, heads, head_dim]
+            # -> [batch, RpQ, heads, head_dim, Hl~ * Wl~]
+            # [batch * heads * RpQ, head_dim, Hl, Wl]
+            value = value[:, None, :, :, :].expand(B, self.num_ref_points_per_query, height * width, H, D)
+            value = value.permute(0, 1, 3, 4, 2).contiguous()
+            value = value.view(B * self.num_heads * self.num_ref_points_per_query, D, height, width)
             # now we need to do the same for the sampling grid
-            sampling_grid = sampling_grids[:, :, :, level, :, :] # [batch, query_len, heads, num_points, 2]
-            # [batch, query_len, heads, num_points, 2] -> [batch * heads, query_len, num_points, 2]
-            grid = sampling_grid.permute(0, 2, 1, 3, 4).contiguous()
-            grid = grid.view(B * self.num_heads, -1, self.num_points, 2)
+            sampling_grid = sampling_grids[:, :, :, level, :, :] # [batch, query_len, heads, num_points, RpQ, 2]
+            # [batch, query_len, heads, num_points, RpQ, 2]
+            # -> [batch, heads, RpQ, query_len, num_points, 2]
+            # -> [batch * heads * RpQ, query_len, num_points, 2]
+            grid = sampling_grid.permute(0, 2, 4, 1, 3, 5).contiguous()
+            grid = grid.view(B * self.num_heads * self.num_ref_points_per_query, -1, self.num_points, 2)
             # now sample the values at the sampling locations using grid_sample
             sampled_value = F.grid_sample(value, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
-            # sampled_value: [B * heads, head_dim, query_len, num_points]
-            # we need to reshape it back to [B, query_len, heads, num_points, head_dim]
-            # [B * heads, head_dim, query_len, num_points] -> [B, heads, head_dim, query_len, num_points]
-            sampled_value = sampled_value.view(B, self.num_heads, D, Q, self.num_points)
-            # [B, heads, head_dim, query_len, num_points] -> [B, query_len, heads, num_points, head_dim]
-            sampled_value = sampled_value.permute(0, 3, 1, 4, 2).contiguous()
+            # sampled_value: [B * heads * RpQ, head_dim, query_len, num_points]
+            # we need to reshape it back to [B, query_len, heads, num_points, RpQ, head_dim]
+            # [B * heads * RpQ, head_dim, query_len, num_points] -> [B, heads, RpQ, head_dim, query_len, num_points]
+            sampled_value = sampled_value.view(B, self.num_heads, self.num_ref_points_per_query, D, Q, self.num_points)
+            # [B, heads, RpQ, head_dim, query_len, num_points] -> [B, query_len, heads, num_points, RpQ, head_dim]
+            sampled_value = sampled_value.permute(0, 4, 1, 5, 2, 3).contiguous()
             # now apply the attention weights
-            attn_weight = attn_weights[:, :, :, level, :] # [B, query_len, heads, num_points]
-            output = sampled_value * attn_weight[..., None] # [B, Q, heads, num_points, head_dim]
-            # [B, Q, heads, num_points, head_dim] -> [B, Q, heads, head_dim]
+            attn_weight = attn_weights[:, :, :, level, :, :] # [B, query_len, heads, num_points, RpQ]
+            output = sampled_value * attn_weight[..., None] # [B, Q, heads, num_points, RpQ, head_dim]
+            # [B, Q, heads, num_points, RpQ, head_dim] -> [B, Q, heads, RpQ, head_dim]
             output = output.sum(dim=3) # sum over the sampled points
             # now we simply stack the sampled values from different levels together
             outputs.append(output)
-        outputs = torch.stack(outputs, dim=3) # [B, Q, heads, num_levels, head_dim]
+        outputs = torch.stack(outputs, dim=3) # [B, Q, heads, num_levels, RpQ, head_dim]
         return outputs
 
     def forward(self, query, reference_points, values, spatial_shapes, key_padding_mask = None):
@@ -535,6 +542,7 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
             dim=-1,
         ).to(dtype=query.dtype) # [num_levels, 2] (width, height) for normalizing the offsets
         offset_normalizer = offset_normalizer.to(dtype=query.dtype)
+        # [batch, query_len, num_levels, RpQ, 2]
         sampling_locations = reference_points[:, :, None, :, None, :, :] + sampling_offsets / offset_normalizer[None, None, None, :, None, None, :]
         output = self._sample_at_points(v, sampling_locations, spatial_shapes, attn_weights) # [B, Q, heads, num_levels, RpQ, head_dim]
         # [B, Q, heads, num_levels, RpQ, head_dim] -> [B, Q, heads, RpQ, head_dim]

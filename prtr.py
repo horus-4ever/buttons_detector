@@ -43,6 +43,7 @@ class PRTR(nn.Module):
             nheads=n_heads,
             nlevels=3,
             npoints=n_points,
+            nrefpointsperquery=2,
             encoder_nlayers=n_encoder_layers,
             decoder_nlayers=n_decoder_layers,
             dim_ffn=dim_ffn,
@@ -54,7 +55,7 @@ class PRTR(nn.Module):
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # we now have 4 points as an output as we are now trying to detect the button pairs
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
+        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2 * 2, mlp_num_layers)
         
     def _compute_masks(self, masks, feature_maps):
         """
@@ -110,8 +111,11 @@ class PRTR(nn.Module):
             query_embed=self.query_embed.weight, # [num_queries, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
+        # reference_points: [query_len, RpQ, 2]
         pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
+        # [B, query_len, 2 * RpQ]
         button_deltas = self.button_head(hs)
+        print(button_deltas.size(), reference_points.size()) ; exit(0)
         # here now we have to predict for 4 points
         pred_buttons = (inverse_sigmoid(reference_points) + button_deltas).sigmoid()  # [B, num_queries, 4]
 
