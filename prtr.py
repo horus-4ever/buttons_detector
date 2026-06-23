@@ -53,6 +53,7 @@ class PRTR(nn.Module):
         )
         # we have there a fixed number of queries
         self.query_embed = nn.Embedding(num_queries, self.d_model)
+        self.refpoint_embed = nn.Embedding(num_queries * nrefpointsperquery, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)

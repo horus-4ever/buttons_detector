@@ -111,30 +111,40 @@ class DecoderLayer(nn.Module):
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
+    
+    def with_queries_embed(self, tensor, query_embed: Tensor, ref_embed: Tensor):
+        """
+        - tensor: [..., num_queries * RqP, embed_dim]
+        - query_embed: [num_queries, embed_dim]
+        - ref_embed: [num_queries * RqP, embed_dim]
+        """
+        Q, C = query_embed.size()
+        query_embed = query_embed.expand(Q, self.num_ref_points_per_query, C)
+        query_embed = query_embed.view(Q * self.num_ref_points_per_query, C)
+        return tensor + query_embed + ref_embed
 
-    def forward(self, input, memory, reference_points, spatial_shapes, queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, memory, reference_points, spatial_shapes, queries_embed: Tensor, memory_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [B, num_queries, RpQ, embed_dim]
         - memory: [B, query_len, embed_dim]
         - reference_points: [query_len, RpQ, 2]
-        - queries_pos: [num_queries, embed_dim]
+        - queries_embed: [num_queries, embed_dim]
         - memory_key_padding_mask: 
         """
-        B, Q, R, C = input.size()
-        # [B, num_queries, RpQ, embed_dim] -> [B, RpQ, num_queries, embed_dim]
-        input = input.permute(0, 2, 1, 3).contiguous()
+        B, Q, RQP, C = input.size()
+        # [B, num_queries, RpQ, embed_dim] -> [B, RpQ * num_queries, embed_dim]
+        input = input.view(B, Q * RQP, C)
         # computes k and q for queries attention
-        k_queries = q_queries = self.with_pos_embed(input, queries_pos)
-        # [B, RpQ, num_queries, embed_dim] -> [B, num_queries, RpQ, embed_dim]
-        k_queries = q_queries = k_queries.permute(0, 2, 1, 3).contiguous().view(B, -1, C)
-        v_queries = input.view(B, -1, C)
+        # TODO: pass a ref_points_embed (instead of the last queries_embed)
+        # [B, RpQ * num_queries, embed_dim]
+        k_queries = q_queries = self.with_queries_embed(input, queries_embed, queries_embed)
+        v_queries = input
         # compute self-attention on queries and dropout
         queries_attention_out = self.queries_attention(q_queries, k_queries, v_queries)[0]
         queries_attention_out = self.dropout1(queries_attention_out)
-        queries_attention_out = queries_attention_out.view(B, Q, R, C)
-        input = input.permute(0, 2, 1, 3)
         # add and normalize
-        # add_norm_out: [B, num_queries, RpQ, embed_dim]
+        # TODO: here look into the size to reshape the input (or the other vector idk)
+        # add_norm_out: [B, num_queries * RpQ, embed_dim]
         add_norm_out = input + queries_attention_out
         add_norm_out = self.norm1(add_norm_out)
         # computes v, k and q for memory attention
@@ -142,7 +152,7 @@ class DecoderLayer(nn.Module):
 
         add_norm_out = add_norm_out.permute(0, 2, 1, 3).contiguous()
         # [num_queries, embed_dim]
-        q_memory = self.with_pos_embed(add_norm_out, queries_pos)
+        q_memory = self.with_pos_embed(add_norm_out, queries_embed)
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         q_memory = q_memory.expand(B, Q, C)
 
