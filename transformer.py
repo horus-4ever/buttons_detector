@@ -100,10 +100,12 @@ class DeformableTransformer(nn.Module):
 
         B, Q, C = memory.size()
         # now prepare the input to the decoder
-        object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
+        # [num_queries, embed_dim]
+        object_queries = torch.zeros_like(query_embed)
+        # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        reference_points = self.proj_reference_points(query_embed) # [query_len, 4]
-        # [query_len, RpQ * 2] -> # [query_len, RpQ, 2]
+        reference_points = self.proj_reference_points(query_embed) # [num_queries, 4]
+        # [num_queries, 4] -> [num_queries, RpQ, 2]
         reference_points = reference_points.view(reference_points.size()[0], -1, 2)
         reference_points = reference_points.sigmoid() # let them be into 0 and 1
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
@@ -115,5 +117,5 @@ class DeformableTransformer(nn.Module):
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
-        # result: [B, query_len, embed_dim]
+        # result: [B, Q, RpQ, embed_dim]
         return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points

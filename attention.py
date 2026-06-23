@@ -558,10 +558,18 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         output = self._sample_at_points(v, sampling_locations, spatial_shapes, attn_weights) # [B, Q, heads, num_levels, RpQ, head_dim]
         # [B, Q, heads, num_levels, RpQ, head_dim] -> [B, Q, heads, RpQ, head_dim]
         output = output.sum(dim=3) # sum over the levels
-        # [B, Q, heads, RpQ, head_dim] -> [B, Q, heads, head_dim]
-        output = output.mean(dim=3) # take the mean of the reference points per query
-        # [B, Q, heads, head_dim] -> [B, Q, embed_dim]
-        output = output.view(batch_size, -1, self.embed_dim)
-        output = self.out_proj(output) # [B, Q, embed_dim]
-        # TODO: think about if the output should not be instead just a [B, Q, RpQ, embed_dim] instead (maybe better for prediction afterwards)
+        
+        # ==================================================================
+        # ========================== IMPORTANT =============================
+        # ==================================================================
+        # ==== Here we can do a few things:                             ====
+        # ==== - take the mean over RpQ, but we lose information        ====
+        # ==== - simply return as it so that we don't lose information  ====
+        # ==================================================================
+        # Let's implement the second option.
+        # [B, Q, heads, RpQ, head_dim] -> [B, Q, RpQ, heads, head_dim]
+        output = output.permute(0, 1, 3, 2, 4).contiguous()
+        # [B, Q, RpQ, heads, head_dim] -> [B, Q, RpQ, embed_dim]
+        output = output.view(batch_size, -1, self.num_ref_points_per_query, self.embed_dim)
+        output = self.out_proj(output) # [B, Q, RpQ, embed_dim]
         return output, attn_weights, sampling_locations

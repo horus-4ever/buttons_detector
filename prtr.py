@@ -51,12 +51,11 @@ class PRTR(nn.Module):
             dropout=dropout,
             activation=activation
         )
-        # we have there a fixed number of queries (10) that is linked to the number of reference points
+        # we have there a fixed number of queries
         self.query_embed = nn.Embedding(num_queries, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
-        # we now have 4 points as an output as we are now trying to detect the button pairs
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2 * nrefpointsperquery, mlp_num_layers)
+        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
         
     def _compute_masks(self, masks, feature_maps):
         """
@@ -111,13 +110,17 @@ class PRTR(nn.Module):
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
             query_embed=self.query_embed.weight, # [num_queries, embed_dim]
         )
-        # hs: [B, query_len, embed_dim]
+        # hs: [B, Q, RpQ, embed_dim]
         # reference_points: [query_len, RpQ, 2]
         Q, num_ref_points_per_query, _ = reference_points.size()
-        pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
-        # [B, query_len, 2 * RpQ]
+        # for the class prediction we can take the mean of the decoder output
+        # -> [B, Q, embed_dim]
+        class_head_input = hs.mean(dim=2) # take the mean over RpQ
+        pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
+        # for the buttons we of course need to keep by RpQ
+        # [B, query_len, RpQ, 2]
         button_deltas = self.button_head(hs)
-        # print(button_deltas.size(), reference_points.size())
+        print(button_deltas.size(), reference_points.size()) ; exit(0)
         button_deltas = button_deltas.view(B, Q, num_ref_points_per_query, 2)
         # print(button_deltas.size(), reference_points.size()) ; exit(0)
         # here now we have to predict for 2 * RpQ points

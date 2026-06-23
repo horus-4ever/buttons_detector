@@ -33,12 +33,13 @@ class Decoder(nn.Module):
             )
             for _ in range(nlayers)
         ])
+        self.num_ref_points_per_query = nrefpointsperquery
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, input, memory, reference_points, spatial_shapes, queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
         """
-        - input: [num_queries, embed_dim]
+        - input: [B, num_queries, embed_dim]
         - memory: [B, sum_l(Hl * Wl), embed_dim]
         - reference_points: [num_queries, 2]
         - spatial_shapes: [num_levels, 2]
@@ -49,7 +50,8 @@ class Decoder(nn.Module):
         decoder_attn_weights = []
         decoder_sampling_locations = []
         # loop over the decoder layers
-        output = input
+        B, Q, C = input.size()
+        output = input[:, :, None, :].expand(B, Q, self.num_ref_points_per_query, C).contiguous()
         for layer in self.layers:
             output, attn_weights, sampling_locations = layer(
                 input=output,
@@ -112,27 +114,39 @@ class DecoderLayer(nn.Module):
 
     def forward(self, input, memory, reference_points, spatial_shapes, queries_pos: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
         """
-        - input: [B, num_queries, embed_dim]
+        - input: [B, num_queries, RpQ, embed_dim]
         - memory: [B, query_len, embed_dim]
         - reference_points: [query_len, RpQ, 2]
         - queries_pos: [num_queries, embed_dim]
         - memory_key_padding_mask: 
         """
-        B, Q, C = input.size()
+        B, Q, R, C = input.size()
+        # [B, num_queries, RpQ, embed_dim] -> [B, RpQ, num_queries, embed_dim]
+        input = input.permute(0, 2, 1, 3).contiguous()
         # computes k and q for queries attention
         k_queries = q_queries = self.with_pos_embed(input, queries_pos)
+        # [B, RpQ, num_queries, embed_dim] -> [B, num_queries, RpQ, embed_dim]
+        k_queries = q_queries = k_queries.permute(0, 2, 1, 3).contiguous().view(B, -1, C)
+        v_queries = input.view(B, -1, C)
         # compute self-attention on queries and dropout
-        queries_attention_out = self.queries_attention(q_queries, k_queries, input)[0]
+        queries_attention_out = self.queries_attention(q_queries, k_queries, v_queries)[0]
         queries_attention_out = self.dropout1(queries_attention_out)
+        queries_attention_out = queries_attention_out.view(B, Q, R, C)
+        input = input.permute(0, 2, 1, 3)
         # add and normalize
+        # add_norm_out: [B, num_queries, RpQ, embed_dim]
         add_norm_out = input + queries_attention_out
         add_norm_out = self.norm1(add_norm_out)
         # computes v, k and q for memory attention
         v_memory = memory # [B, query_len, embed_dim]
+
+        add_norm_out = add_norm_out.permute(0, 2, 1, 3).contiguous()
         # [num_queries, embed_dim]
         q_memory = self.with_pos_embed(add_norm_out, queries_pos)
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         q_memory = q_memory.expand(B, Q, C)
+
+        add_norm_out = add_norm_out.permute(0, 2, 1, 3).contiguous()
         # resize the reference_points to the right size
         # [query_len, RpQ, 2] -> [batch, query_len, num_levels, RpQ, 2]
         reference_points = reference_points[None, :, None, :, :].expand(B, Q, self.num_levels, self.num_ref_points_per_query, 2)
@@ -145,9 +159,13 @@ class DecoderLayer(nn.Module):
             key_padding_mask=memory_key_padding_mask, # 
         )
         # memory_attention_weights: [batch, query_len, heads, num_levels, num_points]
-        # [B, query_len, embed_dim]
+        # result: [B, Q, RpQ, embed_dim]
         memory_attention_out = self.dropout2(memory_attention_out)
         # add and normalize
+        # add_norm_out: [B, num_queries, embed_dim]
+        # memory_attention_out: [B, Q, RpQ, embed_dim]
+        # [B, num_queries, embed_dim] -> [B, num_queries, RpQ, embed_dim]
+        add_norm_out = add_norm_out[:, :, None, :].expand(B, Q, self.num_ref_points_per_query, C)
         add_norm_out = add_norm_out + memory_attention_out
         add_norm_out = self.norm2(add_norm_out)
         # ffn
@@ -155,5 +173,5 @@ class DecoderLayer(nn.Module):
         ffn_out = self.dropout3(ffn_out)
         # add and normalize
         result = add_norm_out + ffn_out
-        result = self.norm3(result)
+        result = self.norm3(result) # [B, Q, RpQ, embed_dim]
         return result, memory_attention_weights, memory_attention_sampling_locations
