@@ -1,9 +1,12 @@
 from dataclasses import dataclass
 from pathlib import Path
 import json
-import sys
 import argparse
-import os
+from typing import Optional
+from io import StringIO
+from contextlib import redirect_stdout
+import random
+import shutil
 
 
 @dataclass
@@ -42,6 +45,59 @@ class YOLO_POSE:
 class YOLO_DETECTION:
     class_index: int
     bbox: BoundingBox
+
+    def __str__(self):
+        result = f"{self.class_index} {self.bbox}"
+        return result
+
+
+@dataclass
+class YOLO_LIST:
+    data: list[YOLO_POSE | YOLO_DETECTION]
+
+    def __str__(self):
+        result = ""
+        for element in self.data:
+            result += f"{element}\n"
+        return result
+    
+    def __iter__(self):
+        return iter(self.data)
+
+
+@dataclass
+class DatasetSplit:
+    random_seed: int
+    training: int
+    validation: int
+    test: int
+
+    @classmethod
+    def from_str(cls, string: str, random_seed: int = 42):
+        train, validate, test = map(int, string.split("/"))
+        return cls(random_seed, train, validate, test)
+
+
+@dataclass
+class YOLODataset:
+    root_path: Path
+    train_path: Path
+    validation_path: Path
+    test_path: Optional[Path]
+    classes: list[str]
+    dataset_split: DatasetSplit
+
+    def to_str(self) -> str:
+        result = StringIO()
+        with redirect_stdout(result):
+            print(f"path: {self.root_path}")
+            print(f"train: {self.train_path}")
+            print(f"val: {self.validation_path}")
+            print(f"test: {self.test_path}")
+            print(f"test: {self.test_path or ''}")
+            for i, class_name in enumerate(self.classes):
+                print(f"    {i}: {class_name}")
+        return result.getvalue()
 
 
 def get_images_and_annotations(images_path: Path, annotations_path: Path):
@@ -98,7 +154,7 @@ def convert_to_pose(annotation_file: Path):
         keypoints = [Point(center_x_ndc, center_y_ndc), Point(kp_x_ndc, kp_y_ndc)] # two keypoints per bounding box
         converted = YOLO_POSE(class_index, bounding_box, keypoints)
         results.append(converted)
-    return results
+    return YOLO_LIST(results)
 
 
 def convert_to_detection(annotation_file: Path):
@@ -118,29 +174,90 @@ def convert_to_detection(annotation_file: Path):
         bounding_box = BoundingBox(Point(origin_x_ndc, origin_y_ndc), width_ndc, height_ndc)
         converted = YOLO_DETECTION(class_index, bounding_box)
         results.append(converted)
-    return results
+    return YOLO_LIST(results)
 
 
-def convert(dataset_path: Path, mode: str, out_directory: Path):
+def ensure_directory(path: Path):
+    """
+    Ensures that the directory exists.
+    """
+    if not path.exists():
+        path.mkdir(parents=True)
+        return True
+    return False
+
+
+def split_dataset(data, split: DatasetSplit):
+    random.seed(split.random_seed)
+    # now get the splits
+    train, valid, test = split.training, split.validation, split.test
+    # first get the indices by shuffling 
+    indices = list(range(len(data)))
+    indices = random.shuffle(indices)
+    # then get the right data
+    train_data = data[:train]
+    validation_data = data[train: valid]
+    test_data = data[valid:]
+    return train_data, validation_data, test_data
+
+
+def save_split(data, image_out_dir: Path, annotation_out_dir: Path):
+    for annotations, image_file in data:
+        # first, we copy the image to the right destination
+        image_name = image_file.name
+        shutil.copy(image_file, image_out_dir / image_name)
+        # now we get the right annotations path
+        out_filename = f"{image_name.stem}.txt"
+        out_file_path = annotation_out_dir / out_filename
+        with open(out_file_path, "w") as out_file:
+            print(annotations, file=out_file)
+
+
+def convert(dataset_path: Path, mode: str, configuration: YOLODataset):
     """
     - dataset_path: Path
     - mode: str
-    - out: FILE
+    - configuration: YOLODataset
     """
+    if configuration.test_path is None and configuration.dataset_split.test != 0:
+        raise RuntimeError("The test path is not set, but the test split is not empty.")
+    # first, get the annotations
     images_path = dataset_path / "images"
     annotations_path = dataset_path / "annotations"
     annotations, images = get_images_and_annotations(images_path, annotations_path)
+    # then, ensure that the output directories exists
+    train_dir = configuration.root_path / configuration.train_path
+    validation_dir = configuration.root_path / configuration.validation_path
+    test_dir = None if configuration.test_path is None else configuration.root_path / configuration.test_path
+    ensure_directory(train_dir)
+    ensure_directory(validation_dir)
+    if test_dir is not None:
+        ensure_directory(test_dir)
+    # now we get all the annotations
+    all_annotations = []
     for annotation_file, image_file in zip(annotations, images):
-        if mode == "pose":
-            converted = convert_to_pose(annotation_file)
-        else:
-            converted = convert_to_detection(annotation_file)
-        # now get the filename for the output
-        image_name = image_file.stem
-        out_file = out_directory / f"{image_name}.txt"
-        with open(out_file, "w") as out:
-            for yolo_format in converted:
-                print(yolo_format, file=out)
+        match mode:
+            case "pose":
+                converted = convert_to_pose(annotation_file)
+            case "detection":
+                converted = convert_to_detection(annotation_file)
+            case _:
+                raise RuntimeError(f"This should not happen ({mode})")
+        all_annotations.append((image_file, converted))
+    # now split the data according
+    train_split, valid_split, test_split = split_dataset(all_annotations, configuration.dataset_split)
+    # get the right directories for the annotations
+    train_ann_dir = configuration.root_path / "train" / "labels"
+    valid_ann_dir = configuration.root_path / "val" / "labels"
+    test_ann_dir = configuration.root_path / "test" / "labels"
+    ensure_directory(train_ann_dir)
+    ensure_directory(valid_ann_dir)
+    ensure_directory(test_ann_dir)
+    save_split(train_split, train_dir, train_ann_dir)
+    save_split(valid_split, validation_dir, valid_ann_dir)
+    if test_dir is not None:
+        save_split(test_split, test_dir, test_ann_dir)
+
 
 
 def init_arg_parser():
@@ -151,6 +268,8 @@ def init_arg_parser():
     parser.add_argument("--dataset", type=str, required=True, help="Dataset to use.")
     parser.add_argument("--mode", type=str, required=True, help="Either 'pose' for YOLO-pose or 'detection' for YOLO-detection.")
     parser.add_argument("--out", type=str, required=True, help="Output path to write files into.")
+    parser.add_argument("--split", type=str, required=True, help="Split train/val/test in percentages. Exemple: '80/20/0'.")
+    parser.add_argument("--split-seed", type=int, required=False, default=42, help="Set the random seed for the split.")
     return parser
 
 
@@ -161,6 +280,17 @@ if __name__ == "__main__":
     dataset_path = Path(arguments.dataset)
     mode = arguments.mode
     out = Path(arguments.out)
+    dataset_split = arguments.split
+    random_seed = arguments.split_seed
     dataset_path = Path("/media/Data/Documents/Etudes/九工大/Shibata LAB/Lab Projects/DressingAssistant/Clothes_blender/out")
-    convert(dataset_path, mode, out)
+    # convert to the object
+    configuration = YOLODataset(
+        root_path=out,
+        train_path=out / "images" / "train",
+        validation_path=out / "images" / "val",
+        test_path=out / "images" / "test",
+        classes=["button"],
+        dataset_split=DatasetSplit.from_str(dataset_split, random_seed=random_seed)
+    )
+    convert(dataset_path, mode, configuration)
     # python3 converter/converter.py --dataset "/media/Data/Documents/Etudes/九工大/Shibata LAB/Lab Projects/DressingAssistant/Clothes_blender/out" --mode pose --out converter/script_tests/
