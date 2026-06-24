@@ -7,6 +7,7 @@ from io import StringIO
 from contextlib import redirect_stdout
 import random
 import shutil
+from math import ceil
 
 
 @dataclass
@@ -90,11 +91,12 @@ class YOLODataset:
     def to_str(self) -> str:
         result = StringIO()
         with redirect_stdout(result):
-            print(f"path: {self.root_path}")
+            print(f"path: {self.root_path}\n")
             print(f"train: {self.train_path}")
             print(f"val: {self.validation_path}")
-            print(f"test: {self.test_path}")
-            print(f"test: {self.test_path or ''}")
+            print(f"test: {self.test_path or ''}\n")
+            print(f"nc: {len(self.classes)}\n")
+            print(f"names:")
             for i, class_name in enumerate(self.classes):
                 print(f"    {i}: {class_name}")
         return result.getvalue()
@@ -106,7 +108,7 @@ def get_images_and_annotations(images_path: Path, annotations_path: Path):
     images_files = []
     for annotation_file in generator:
         filename = annotation_file.stem
-        image_file = images_path / f"{filename}.jpg"
+        image_file = images_path / f"{filename}.png"
         images_files.append(image_file)
         annotations_files.append(annotation_file)
     return annotations_files, images_files
@@ -167,7 +169,7 @@ def convert_to_detection(annotation_file: Path):
         # extract the origin of the bounding box, and normalize
         origin_x_px, origin_y_px = bbox_data["x_min_px"], bbox_data["y_min_px"]
         origin_x_ndc, origin_y_ndc = origin_x_px / width, origin_y_px / height
-        width_px, height_px = bbox_data["width"], bbox_data["height"]
+        width_px, height_px = bbox_data["width_px"], bbox_data["height_px"]
         width_ndc, height_ndc = width_px / width, height_px / height
         # now get the bounding box for that
         class_index = 0 # there is only one class
@@ -190,24 +192,25 @@ def ensure_directory(path: Path):
 def split_dataset(data, split: DatasetSplit):
     random.seed(split.random_seed)
     # now get the splits
-    train, valid, test = split.training, split.validation, split.test
+    N = len(data) # dataset size
+    train, valid, test = ceil(N * split.training / 100), ceil(N * split.validation / 100), ceil(N * split.test / 100)
     # first get the indices by shuffling 
     indices = list(range(len(data)))
     indices = random.shuffle(indices)
     # then get the right data
     train_data = data[:train]
-    validation_data = data[train: valid]
-    test_data = data[valid:]
+    validation_data = data[train: train + valid]
+    test_data = data[train + valid:]
     return train_data, validation_data, test_data
 
 
 def save_split(data, image_out_dir: Path, annotation_out_dir: Path):
-    for annotations, image_file in data:
+    for image_file, annotations in data:
         # first, we copy the image to the right destination
         image_name = image_file.name
         shutil.copy(image_file, image_out_dir / image_name)
         # now we get the right annotations path
-        out_filename = f"{image_name.stem}.txt"
+        out_filename = f"{image_file.stem}.txt"
         out_file_path = annotation_out_dir / out_filename
         with open(out_file_path, "w") as out_file:
             print(annotations, file=out_file)
@@ -247,9 +250,9 @@ def convert(dataset_path: Path, mode: str, configuration: YOLODataset):
     # now split the data according
     train_split, valid_split, test_split = split_dataset(all_annotations, configuration.dataset_split)
     # get the right directories for the annotations
-    train_ann_dir = configuration.root_path / "train" / "labels"
-    valid_ann_dir = configuration.root_path / "val" / "labels"
-    test_ann_dir = configuration.root_path / "test" / "labels"
+    train_ann_dir = configuration.root_path / "labels" / "train"
+    valid_ann_dir = configuration.root_path / "labels" / "val"
+    test_ann_dir = configuration.root_path / "labels" / "test"
     ensure_directory(train_ann_dir)
     ensure_directory(valid_ann_dir)
     ensure_directory(test_ann_dir)
@@ -257,7 +260,12 @@ def convert(dataset_path: Path, mode: str, configuration: YOLODataset):
     save_split(valid_split, validation_dir, valid_ann_dir)
     if test_dir is not None:
         save_split(test_split, test_dir, test_ann_dir)
-
+    # now write the configuration file
+    dataset_name = dataset_path.stem
+    config_file_name = f"{dataset_name}__{mode}.yaml"
+    config_file_path = configuration.root_path / config_file_name
+    with open(config_file_path, "w") as file:
+        print(configuration.to_str(), file=file)
 
 
 def init_arg_parser():
@@ -282,7 +290,6 @@ if __name__ == "__main__":
     out = Path(arguments.out)
     dataset_split = arguments.split
     random_seed = arguments.split_seed
-    dataset_path = Path("/media/Data/Documents/Etudes/九工大/Shibata LAB/Lab Projects/DressingAssistant/Clothes_blender/out")
     # convert to the object
     configuration = YOLODataset(
         root_path=out,
@@ -293,4 +300,3 @@ if __name__ == "__main__":
         dataset_split=DatasetSplit.from_str(dataset_split, random_seed=random_seed)
     )
     convert(dataset_path, mode, configuration)
-    # python3 converter/converter.py --dataset "/media/Data/Documents/Etudes/九工大/Shibata LAB/Lab Projects/DressingAssistant/Clothes_blender/out" --mode pose --out converter/script_tests/
