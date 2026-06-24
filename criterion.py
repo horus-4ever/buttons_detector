@@ -36,7 +36,11 @@ class HungarianMatcher(nn.Module):
             list of size B, each element is (pred_indices, target_indices)
         """
         pred_logits = outputs["pred_logits"]      # [B, Q, C+1]
-        pred_buttons = outputs["pred_buttons"]    # [B, Q, 2]
+        # WARNING: now, the predictions are of shape [B, Q, RqP, 2]
+        pred_positions = outputs["pred_buttons"]    # [B, Q, RqP, 2]
+        # we split into buttons and keypoints
+        pred_buttons = pred_positions[:, :, 0, :] # [B, Q, 2]
+        pred_keypoints = pred_positions[:, :, 1, :] # [B, Q, 2]
 
         bs, num_queries = pred_logits.shape[:2] # predictions, get the batch size
 
@@ -130,26 +134,37 @@ class SetCriterion(nn.Module):
         return {"loss_ce": loss_ce}
 
     def loss_buttons(self, outputs, targets, indices):
-        src_coords = outputs["pred_buttons"]  # [B, Q, 2]
-        bs, q, _ = src_coords.shape
+        # WARNING: outputs are now of shape [B, Q, RqP, 2]
+        src_coords = outputs["pred_buttons"]  # [B, Q, RqP, 2]
+        # split into buttons and keypoints
+        src_button_coords = src_coords[:, :, 0, :] # [B, Q, 2]
+        src_keypoints_coords = src_coords[:, :, 0, :] # [B, Q, 2]
 
-        matched_pred = []
-        matched_tgt = []
-
+        matched_button_coords = []
+        matched_keypoints_coords = []
+        matched_button_target = []
+        matched_keypoints_target = []
+        # get the matched button and keypoint predictions
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) > 0:
-                matched_pred.append(src_coords[b, src_idx])
-                matched_tgt.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-
-        if len(matched_pred) == 0:
+                matched_button_coords.append(src_button_coords[b, src_idx])
+                matched_keypoints_coords.append(src_keypoints_coords[b, src_idx])
+                matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
+                matched_keypoints_target.append(targets[b]["keypoints"][tgt_idx].to(src_coords.device))
+        # if there is no predictions, then the loss is null
+        if len(matched_button_coords) == 0:
             loss_button = torch.tensor(0.0, device=src_coords.device)
         else:
-            matched_pred = torch.cat(matched_pred, dim=0)
-            matched_tgt = torch.cat(matched_tgt, dim=0)
-            losses = []
-            for p1, p2 in zip(matched_pred, matched_tgt):
-                losses.append(torch.linalg.vector_norm(p1 - p2))
-            loss_button = torch.stack(losses).mean()
+            # [B, Q, 2] -> [B * Q, 2]
+            matched_button_coords = torch.cat(matched_button_coords, dim=0)
+            # [B, Q, 2] -> [B * Q, 2]
+            matched_keypoints_coords = torch.cat(matched_keypoints_coords, dim=0)
+            matched_button_target = torch.cat(matched_button_target, dim=0)
+            matched_keypoints_target = torch.cat(matched_keypoints_target, dim=0)
+            # now we define the loss
+            # we first compute two independent losses for buttons and keypoints
+            loss_buttons = F.l1_loss(matched_button_coords, matched_button_target)
+            loss_keypoints = F.l1_loss(matched_keypoints_coords, matched_keypoints_target)
         return {"loss_button": loss_button}
 
     def forward(self, outputs, targets):
