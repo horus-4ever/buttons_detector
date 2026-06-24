@@ -11,6 +11,15 @@ log_regex = re.compile(
     r".*?\|\s+val loss:\s+(?P<val_loss>\d+(?:\.\d+)?)"
 )
 
+log_regex_2 = re.compile(
+    r"Epoch\s+\[(?P<epoch>\d+)/\d+\]\s*\|\s*"
+    r"train\s*\(\s*loss\s*=\s*(?P<train_loss>\d+(?:\.\d+)?)"
+    r".*?\|\s*"
+    r"val\s*\(\s*loss\s*=\s*(?P<val_loss>\d+(?:\.\d+)?)"
+)
+
+REGEXES = [log_regex, log_regex_2]
+
 
 def parse_log_file(file: Path):
     with open(file, "r") as document:
@@ -22,8 +31,12 @@ def parse_log_data(log_data):
     log_data = log_data.split("\n")
     losses = []
     for line in log_data:
-        result = log_regex.search(line)
-        if not result:
+        results = [regex.search(line) for regex in REGEXES]
+        result = None
+        for match in results:
+            if match:
+                result = match
+        if result is None:
             continue
         epoch = int(result.group("epoch"))
         train_loss = float(result.group("train_loss"))
