@@ -53,10 +53,11 @@ class DeformableTransformer(nn.Module):
         # we now learn 2 points, so 4 values per query
         self.proj_reference_points = nn.Linear(d_model, 2 * nrefpointsperquery)
 
-    def forward(self, features, query_embed, pos_embeds, masks):
+    def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
         - features: num_levels * [B, embed_dim, Hl, Wl]
         - query_embed: [num_queries, embed_dim]
+        - refpoints_embed: [RpQ, embed_dim]
         - pos_embeds: num_levels * [B, embed_dim, Hl, Wl]
         - masks: num_levels * [B, 1, Hl, Wl]
         """
@@ -113,7 +114,8 @@ class DeformableTransformer(nn.Module):
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
             reference_points=reference_points, # [query_len, RpQ, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
-            queries_pos=query_embed, # [num_queries, embed_dim]
+            query_embed=query_embed, # [num_queries, embed_dim]
+            refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]

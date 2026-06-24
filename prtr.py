@@ -53,7 +53,9 @@ class PRTR(nn.Module):
         )
         # we have there a fixed number of queries
         self.query_embed = nn.Embedding(num_queries, self.d_model)
-        self.refpoint_embed = nn.Embedding(num_queries * nrefpointsperquery, self.d_model)
+        # NEW: The reference point embedding is there to encode the difference between a button and a hole.
+        #      It is applied to all reference points on top of the query_embed, which encodes the pair information.
+        self.refpoints_embed = nn.Embedding(nrefpointsperquery, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
@@ -110,6 +112,7 @@ class PRTR(nn.Module):
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
             query_embed=self.query_embed.weight, # [num_queries, embed_dim]
+            refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, Q, RpQ, embed_dim]
         # reference_points: [query_len, RpQ, 2]
@@ -121,7 +124,6 @@ class PRTR(nn.Module):
         # for the buttons we of course need to keep by RpQ
         # [B, query_len, RpQ, 2]
         button_deltas = self.button_head(hs)
-        print(button_deltas.size(), reference_points.size()) ; exit(0)
         button_deltas = button_deltas.view(B, Q, num_ref_points_per_query, 2)
         # print(button_deltas.size(), reference_points.size()) ; exit(0)
         # here now we have to predict for 2 * RpQ points
