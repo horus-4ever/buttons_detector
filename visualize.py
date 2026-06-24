@@ -37,6 +37,7 @@ class Prediction:
     pos_x: float
     pos_y: float
     confidence: float
+    query: int
 
 
 def load_model(model_config_path: str | Path, model_weights_path: str | Path, device: torch.device):
@@ -112,7 +113,7 @@ def get_predictions(image, outputs):
         confidence = float(pred_probs[query_idx, BUTTON_CLASS_ID])
         xy_norm_tensor = pred_buttons[query_idx]
         pos_x, pos_y = normalized_to_pixel_xy(xy_norm_tensor, width, height)
-        predictions.append(Prediction(class_id, pos_x, pos_y, confidence))
+        predictions.append(Prediction(class_id, pos_x, pos_y, confidence, query_idx))
     return predictions
 
 
@@ -127,7 +128,7 @@ def get_attention_maps(attn_weights):
     return attn_weights
 
 
-def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predictions) -> list[Image.Image]:
+def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predictions):
     """
     - attn_maps: [query_len, heads, num_levels, num_points]
     - spatial_shapes: [num_levels, 2]
@@ -141,8 +142,14 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
     # flatten that
     sampling_locations = sampling_locations.reshape(num_queries, -1, 2)
     attn_maps = attn_maps.reshape(num_queries, -1)
+    # create the figure
+    n_col = 4
+    figure, axes = plt.subplots(3, n_col, figsize=(10, 10), dpi=80, squeeze=False)
+    for y_ax in axes:
+        for ax in y_ax:
+            ax.axis('off')
     # loop over the queries to have each attention per query
-    query_attn_maps_images = []
+    fig_number = 0
     for attn_map, locations, prediction in zip(attn_maps, sampling_locations, predictions):
         if prediction.class_id != BUTTON_CLASS_ID:
             continue
@@ -167,8 +174,14 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
                 fill=(0, 255, 0, 255)
             )
         attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
-        query_attn_maps_images.append(attn_map_image)
-    return query_attn_maps_images
+        attn_map_image.resize((512, 512))
+        # now add that on the figure
+        ax = axes[fig_number // n_col][fig_number % n_col]
+        ax.imshow(attn_map_image)
+        ax.set_title(f"Query {prediction.query} (p={prediction.confidence:.2f})")
+        # increment the number of figures
+        fig_number += 1
+    return figure
 
 
 def visualize_predictions(image: Image.Image, predictions):
@@ -185,21 +198,6 @@ def visualize_predictions(image: Image.Image, predictions):
             fill=(0, 255, 0, 255)
         )
     return result_image
-
-
-def create_plot(images):
-    fig = plt.figure(figsize=(5, 2))
-    images = [img.resize((512, 512)) for img in images]
-    # Create an ImageGrid with a custom padding (axes_pad) in inches
-    grid = ImageGrid(fig, 111,          # similar to subplot(111)
-                    nrows_ncols=(2, 5), # 2x2 grid
-                    axes_pad=0.1,       # pad between images
-                    )
-
-    for ax, img in zip(grid, images):
-        ax.imshow(img)
-        ax.axis('off')
-    return fig
 
 
 def visualize_one(
@@ -224,8 +222,7 @@ def visualize_one(
     # get the spatial shapes and then visualize the attention
     spatial_shapes = outputs["spatial_shapes"]
     sampling_locations = outputs["sampling_locations"]
-    attn_images = visualize_attention(image, attn_maps, sampling_locations, predictions)
-    fig = create_plot(attn_images)
+    fig = visualize_attention(image, attn_maps, sampling_locations, predictions)
     fig.savefig(Path(f"visualize/{image_name}_attn.png"), dpi=300)
     # now save the whole image
     img_predictions = visualize_predictions(image, predictions)

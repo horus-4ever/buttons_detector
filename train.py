@@ -139,7 +139,7 @@ class RandomTrainTransform:
         return transform(image, labels)
 
 
-def make_val_transform(size: int = 640):
+def make_val_transform(size: int = 512):
     """
     Deterministic validation transform.
     No erasing, no jitter, no random translation, no random blur.
@@ -339,7 +339,7 @@ def init_trainer(model_config):
     cost_coord = training_parameters["cost_coord"]
     cost_attn_map = training_parameters["cost_attn_map"]
 
-    val_size = training_parameters.get("val_size", 640)
+    val_size = training_parameters.get("val_size", 512)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
