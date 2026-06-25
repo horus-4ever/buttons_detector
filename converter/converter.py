@@ -27,7 +27,8 @@ class BoundingBox:
     def __str__(self):
         width = abs(self.max_point.x - self.min_point.x)
         height = abs(self.max_point.y - self.min_point.y)
-        return f"{self.min_point} {width} {height}"
+        center = Point(self.min_point.x + width / 2, self.min_point.y + height / 2)
+        return f"{center} {width} {height}"
 
 
 @dataclass
@@ -249,8 +250,6 @@ def convert(dataset_path: Path, mode: str, configuration: YOLODataset):
                 converted = convert_to_detection(annotation_file)
             case _:
                 raise RuntimeError(f"This should not happen ({mode})")
-        visualize_yolo_element(image_file, converted)
-        exit(0)
         all_annotations.append((image_file, converted))
     # now split the data according
     train_split, valid_split, test_split = split_dataset(all_annotations, configuration.dataset_split)

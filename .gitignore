@@ -9,6 +9,7 @@ tests/
 model.json
 yolo-models/
 visualize/
+runs/
 converter/script_tests/
 *.pth
 *.pt
