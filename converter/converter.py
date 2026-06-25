@@ -249,6 +249,8 @@ def convert(dataset_path: Path, mode: str, configuration: YOLODataset):
                 converted = convert_to_detection(annotation_file)
             case _:
                 raise RuntimeError(f"This should not happen ({mode})")
+        visualize_yolo_element(image_file, converted)
+        exit(0)
         all_annotations.append((image_file, converted))
     # now split the data according
     train_split, valid_split, test_split = split_dataset(all_annotations, configuration.dataset_split)
@@ -269,6 +271,67 @@ def convert(dataset_path: Path, mode: str, configuration: YOLODataset):
     config_file_path = configuration.root_path / config_file_name
     with open(config_file_path, "w") as file:
         print(configuration.to_str(), file=file)
+
+
+
+def visualize_yolo_element(image_file: Path, annotations: YOLO_LIST, title: str | None = None):
+    """
+    Visualize one converted YOLO_LIST over its image.
+
+    Expects:
+    - bbox coordinates normalized in [0, 1]
+    - keypoints normalized in [0, 1]
+    """
+    from PIL import Image
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+
+    image = Image.open(image_file).convert("RGB")
+    image_width, image_height = image.size
+    fig, ax = plt.subplots()
+    ax.imshow(image)
+    ax.set_axis_off()
+    if title is None:
+        title = image_file.name
+    ax.set_title(title)
+    for i, element in enumerate(annotations):
+        bbox = element.bbox
+        x = bbox.min_point.x * image_width
+        y = bbox.min_point.y * image_height
+        w = abs(bbox.max_point.x - bbox.min_point.x) * image_width
+        h = abs(bbox.max_point.y - bbox.min_point.y) * image_height
+        rect = patches.Rectangle(
+            (x, y),
+            w,
+            h,
+            fill=False,
+            linewidth=2,
+        )
+        ax.add_patch(rect)
+
+        ax.text(
+            x,
+            y,
+            f"{element.class_index}:{i}",
+            fontsize=9,
+            verticalalignment="bottom",
+            bbox={"facecolor": "white", "alpha": 0.6, "edgecolor": "none"},
+        )
+        if isinstance(element, YOLO_POSE):
+            for kp_index, keypoint in enumerate(element.keypoints):
+                kp_x = keypoint.x * image_width
+                kp_y = keypoint.y * image_height
+
+                ax.scatter(kp_x, kp_y, s=30)
+                ax.text(
+                    kp_x,
+                    kp_y,
+                    str(kp_index),
+                    fontsize=8,
+                    bbox={"facecolor": "white", "alpha": 0.6, "edgecolor": "none"},
+                )
+    plt.tight_layout()
+    plt.show()
 
 
 def init_arg_parser():
