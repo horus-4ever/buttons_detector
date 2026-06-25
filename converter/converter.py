@@ -21,12 +21,13 @@ class Point:
 
 @dataclass
 class BoundingBox:
-    origin: Point
-    width: float
-    height: float
+    min_point: Point
+    max_point: Point
 
     def __str__(self):
-        return f"{self.origin} {self.width} {self.height}"
+        width = abs(self.max_point.x - self.min_point.x)
+        height = abs(self.max_point.y - self.min_point.y)
+        return f"{self.min_point} {width} {height}"
 
 
 @dataclass
@@ -126,10 +127,12 @@ def get_bounding_box(x1: float, y1: float, x2: float, y2: float) -> BoundingBox:
         y1, y2 = y2, y1
     # then get the right coordinates
     origin_x, origin_y = x1, y1
+    max_x, max_y = x2, y2
     width, height = (x2 - x1), (y2 - y1)
     # then simply wrap it into objects
     origin = Point(origin_x, origin_y)
-    return BoundingBox(origin, width, height)
+    max_point = Point(max_x, max_y)
+    return BoundingBox(origin, max_point)
 
 
 def convert_to_pose(annotation_file: Path):
@@ -169,11 +172,11 @@ def convert_to_detection(annotation_file: Path):
         # extract the origin of the bounding box, and normalize
         origin_x_px, origin_y_px = bbox_data["x_min_px"], bbox_data["y_min_px"]
         origin_x_ndc, origin_y_ndc = origin_x_px / width, origin_y_px / height
-        width_px, height_px = bbox_data["width_px"], bbox_data["height_px"]
-        width_ndc, height_ndc = width_px / width, height_px / height
+        max_x_px, max_y_px = bbox_data["x_max_px"], bbox_data["y_max_px"]
+        max_x_ndc, max_y_ndc = max_x_px / width, max_y_px / height
         # now get the bounding box for that
         class_index = 0 # there is only one class
-        bounding_box = BoundingBox(Point(origin_x_ndc, origin_y_ndc), width_ndc, height_ndc)
+        bounding_box = BoundingBox(Point(origin_x_ndc, origin_y_ndc), Point(max_x_ndc, max_y_ndc))
         converted = YOLO_DETECTION(class_index, bounding_box)
         results.append(converted)
     return YOLO_LIST(results)
