@@ -47,6 +47,7 @@ class HungarianMatcher(nn.Module):
         # Convert logits to probabilities
         out_prob = pred_logits.softmax(-1)  # [B, Q, C+1]
         out_coord = pred_buttons            # [B, Q, 2]
+        pred_holes = pred_keypoints
 
         indices = []
 
@@ -54,6 +55,7 @@ class HungarianMatcher(nn.Module):
             tgt_labels = targets[b]["labels"]     # [num_gt] number of ground-truth buttons (2, 3, 4, 5, 6, 7)
             # print(tgt_labels)
             tgt_coords = targets[b]["buttons"]    # [num_gt, 2]
+            tgt_holes = targets[b]["keypoints"]
             # print(tgt_coords)
 
             if tgt_coords.numel() == 0:
@@ -71,8 +73,9 @@ class HungarianMatcher(nn.Module):
             # Coordinate cost
             # out_coord[b]: [Q, 2], tgt_coords: [num_gt, 2]
             cost_coord = torch.cdist(out_coord[b], tgt_coords, p=2)
+            cost_hole = torch.cdist(pred_holes[b], tgt_holes, p=2)
             # Total cost
-            C = self.cost_class * cost_class + self.cost_coord * cost_coord
+            C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole)
             C = C.cpu()
 
             pred_ind, tgt_ind = linear_sum_assignment(C)
@@ -138,7 +141,7 @@ class SetCriterion(nn.Module):
         src_coords = outputs["pred_buttons"]  # [B, Q, RqP, 2]
         # split into buttons and keypoints
         src_button_coords = src_coords[:, :, 0, :] # [B, Q, 2]
-        src_keypoints_coords = src_coords[:, :, 0, :] # [B, Q, 2]
+        src_keypoints_coords = src_coords[:, :, 1, :] # [B, Q, 2]
 
         matched_button_coords = []
         matched_keypoints_coords = []
@@ -165,6 +168,7 @@ class SetCriterion(nn.Module):
             # we first compute two independent losses for buttons and keypoints
             loss_buttons = F.l1_loss(matched_button_coords, matched_button_target)
             loss_keypoints = F.l1_loss(matched_keypoints_coords, matched_keypoints_target)
+            loss_button = loss_buttons + loss_keypoints
         return {"loss_button": loss_button}
 
     def forward(self, outputs, targets):

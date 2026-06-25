@@ -50,8 +50,7 @@ class DeformableTransformer(nn.Module):
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
-        # we now learn 2 points, so 4 values per query
-        self.proj_reference_points = nn.Linear(d_model, 2 * nrefpointsperquery)
+        self.proj_reference_points = nn.Linear(d_model, 2)
 
     def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
@@ -105,10 +104,15 @@ class DeformableTransformer(nn.Module):
         object_queries = torch.zeros_like(query_embed)
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        reference_points = self.proj_reference_points(query_embed) # [num_queries, 4]
-        # [num_queries, 4] -> [num_queries, RpQ, 2]
-        reference_points = reference_points.view(reference_points.size()[0], -1, 2)
-        reference_points = reference_points.sigmoid() # let them be into 0 and 1
+        # now we get the reference points by linear projection
+        # [Q, C] -> [Q, 1, C]
+        query_tokens = query_embed[:, None, :]
+        # [RqP, C] -> [1, RqP, C]
+        role_tokens = refpoints_embed[None, :, :]
+        # [Q, RqP, C]
+        token_embed = query_tokens + role_tokens # we construct from both query and reference points embedings
+        # [Q, RqP, 2]
+        reference_points = self.proj_reference_points(token_embed).sigmoid()
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
@@ -118,6 +122,6 @@ class DeformableTransformer(nn.Module):
             refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
-        # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
+        # decoder_attn_weights: decoder_layers * [batch, query_len * RqP, heads, num_levels, num_points]
         # result: [B, Q, RpQ, embed_dim]
         return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points

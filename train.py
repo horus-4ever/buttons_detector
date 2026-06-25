@@ -59,31 +59,38 @@ class ButtonDataset(Dataset):
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
 
         buttons = ann.get("buttons", [])
-        coords = []
+        keypoints = ann.get("keypoints", [])
+        buttons_coords = []
+        holes_coords = []
 
-        for b in buttons:
+        for b, keypoint in zip(buttons, keypoints):
             center = b # ["center"]
-            if "x_ndc" in center and "y_ndc" in center:
-                x = float(center["x_ndc"])
-                y = 1.0 - float(center["y_ndc"])
-            else:
-                x = float(center["x_px"]) / float(width)
-                y = float(center["y_px"]) / float(height)
-
-            coords.append([x, y])
-
+            button_x = float(center["x_ndc"])
+            button_y = 1.0 - float(center["y_ndc"])
+            buttons_coords.append([button_x, button_y])
+            # now for the holes_coords
+            hole_x = float(keypoint["x_ndc"])
+            hole_y = 1.0 - float(keypoint["y_ndc"])
+            holes_coords.append([hole_x, hole_y])
         image = Image.open(img_path).convert("RGB")
 
         # apply transforms to the image
         if self.transform is not None:
-            image, coords = self.transform(image, coords)
+            image, buttons_coords, holes_coords = self.transform(image, buttons_coords, holes_coords)
 
-        if torch.is_tensor(coords):
-            target_buttons = coords.to(dtype=torch.float32)
-        elif len(coords) == 0:
+        if torch.is_tensor(buttons_coords):
+            target_buttons = buttons_coords.to(dtype=torch.float32)
+        elif len(buttons_coords) == 0:
             target_buttons = torch.zeros((0, 2), dtype=torch.float32)
         else:
-            target_buttons = torch.tensor(coords, dtype=torch.float32)
+            target_buttons = torch.tensor(buttons_coords, dtype=torch.float32)
+
+        if torch.is_tensor(holes_coords):
+            target_holes = holes_coords.to(dtype=torch.float32)
+        elif len(holes_coords) == 0:
+            target_holes = torch.zeros((0, 2), dtype=torch.float32)
+        else:
+            target_holes = torch.tensor(holes_coords, dtype=torch.float32)
 
         if torch.is_tensor(image):
             out_h, out_w = image.shape[-2:]
@@ -93,6 +100,7 @@ class ButtonDataset(Dataset):
         target = {
             "labels": torch.zeros((len(target_buttons),), dtype=torch.int64),
             "buttons": target_buttons,
+            "keypoints": target_holes,
             "image_id": name,
             "size": torch.tensor([out_h, out_w], dtype=torch.int64),
         }
@@ -109,7 +117,7 @@ class RandomTrainTransform:
     def __init__(self, sizes=(512,)):
         self.sizes = sizes
 
-    def __call__(self, image, labels):
+    def __call__(self, image, button_labels, hole_labels):
         size = random.choice(self.sizes)
 
         transform = ComposeWithLabels([
@@ -136,7 +144,7 @@ class RandomTrainTransform:
             )),
         ])
 
-        return transform(image, labels)
+        return transform(image, button_labels, hole_labels)
 
 
 def make_val_transform(size: int = 640):
