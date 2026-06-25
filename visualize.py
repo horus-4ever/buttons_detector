@@ -194,7 +194,10 @@ def visualize_predictions(image: Image.Image, button_predictions, hole_predictio
         )
         blackboard.ellipse(
             (hole_x - radius, hole_y - radius, hole_x + radius, hole_y + radius),
-            fill=(200, 255, 0, 255)
+            fill=(255, 200, 0, 255)
+        )
+        blackboard.line(
+            (button_x, button_y, hole_x, hole_y), fill=(0, 0, 0, 0), width=4
         )
     return result_image
 
@@ -231,7 +234,7 @@ def visualize_one(
     button_predictions, hole_predictions = get_predictions(image, outputs)
     print(len(list(filter(lambda p: p.class_id == BUTTON_CLASS_ID, button_predictions))))
     # normalize the attention maps
-    # [query_len, heads, num_levels, num_points], where query_len = 10
+    # [query_len * RpQ, heads, num_levels, num_points], where query_len = 10
     attn_maps = get_attention_maps(outputs["attn_maps"])
     # get the spatial shapes and then visualize the attention
     spatial_shapes = outputs["spatial_shapes"]
@@ -335,8 +338,8 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
-    # model_config_path = Path("model.json")
-    # model_weights_path = Path("checkpoints/last.pt")
+    model_config_path = Path("model.json")
+    model_weights_path = Path("checkpoints/last.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")
