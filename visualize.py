@@ -134,7 +134,7 @@ def get_attention_maps(attn_weights):
     return attn_weights
 
 
-def visualize_attention(image: Image.Image, attn_maps, reference_points, sampling_locations, predictions) -> list[Image.Image]:
+def visualize_attention(image: Image.Image, attn_maps, reference_points, sampling_locations, predictions):
     """
     - attn_maps: [query_len * RpQ, heads, num_levels, num_points]
     - spatial_shapes: [num_levels, 2]
@@ -149,8 +149,14 @@ def visualize_attention(image: Image.Image, attn_maps, reference_points, samplin
     # flatten that
     sampling_locations = sampling_locations.reshape(num_queries, -1, 2)
     attn_maps = attn_maps.reshape(num_queries, -1)
+    # create the figure
+    n_col = 4
+    figure, axes = plt.subplots(3, n_col, figsize=(10, 10), dpi=80, squeeze=False)
+    for y_ax in axes:
+        for ax in y_ax:
+            ax.axis('off')
     # loop over the queries to have each attention per query
-    query_attn_maps_images = []
+    fig_number = 0
     for attn_map, locations, ref_points, prediction in zip(attn_maps, sampling_locations, reference_points, predictions):
         if prediction.class_id != BUTTON_CLASS_ID:
             continue
@@ -183,8 +189,14 @@ def visualize_attention(image: Image.Image, attn_maps, reference_points, samplin
                 fill=(0, 255, 0, 255)
             )
         attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
-        query_attn_maps_images.append(attn_map_image)
-    return query_attn_maps_images
+        attn_map_image.resize((512, 512))
+        # now add that on the figure
+        ax = axes[fig_number // n_col][fig_number % n_col]
+        ax.imshow(attn_map_image)
+        ax.set_title(f"Query {prediction.query} (p={prediction.confidence:.2f})")
+        # increment the number of figures
+        fig_number += 1
+    return figure
 
 
 def visualize_predictions(image: Image.Image, button_predictions, hole_predictions):
@@ -249,8 +261,7 @@ def visualize_one(
     # get the spatial shapes and then visualize the attention
     spatial_shapes = outputs["spatial_shapes"]
     sampling_locations = outputs["sampling_locations"]
-    attn_images = visualize_attention(image, attn_maps, reference_points, sampling_locations, button_predictions)
-    fig = create_plot(attn_images)
+    fig = visualize_attention(image, attn_maps, reference_points, sampling_locations, button_predictions)
     fig.savefig(Path(f"visualize/{image_name}_attn.png"), dpi=300)
     # now save the whole image
     img_predictions = visualize_predictions(image, button_predictions, hole_predictions)
@@ -348,8 +359,8 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
-    model_config_path = Path("model.json")
-    model_weights_path = Path("checkpoints/last.pt")
+    # model_config_path = Path("model.json")
+    # model_weights_path = Path("checkpoints/last.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")
