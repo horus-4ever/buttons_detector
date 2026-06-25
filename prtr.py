@@ -135,7 +135,7 @@ class PRTR(nn.Module):
             "attn_maps": decoder_attn_maps, # decoder_layers * [batch, query_len * RqP, heads, num_levels, num_points]
             "sampling_locations": decoder_sampling_locations, # [batch, query_len, heads, num_levels, num_points, 2]
             "spatial_shapes": spatial_shapes, # [num_levels, 2]
-            "reference_points": reference_points,
+            "reference_points": reference_points, # [query_len, RpQ, 2]
             "image_size": (H, W)
         }
 

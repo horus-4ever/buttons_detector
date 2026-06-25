@@ -134,11 +134,12 @@ def get_attention_maps(attn_weights):
     return attn_weights
 
 
-def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predictions) -> list[Image.Image]:
+def visualize_attention(image: Image.Image, attn_maps, reference_points, sampling_locations, predictions) -> list[Image.Image]:
     """
     - attn_maps: [query_len * RpQ, heads, num_levels, num_points]
     - spatial_shapes: [num_levels, 2]
     - sampling_locations: [batch, query_len, heads, num_levels, num_points, 2]
+    - reference_points: [num_queries, RpQ, 2]
     """
     image = image.convert("L").convert("RGBA")
     W_img, H_img = image.size
@@ -150,7 +151,7 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
     attn_maps = attn_maps.reshape(num_queries, -1)
     # loop over the queries to have each attention per query
     query_attn_maps_images = []
-    for attn_map, locations, prediction in zip(attn_maps, sampling_locations, predictions):
+    for attn_map, locations, ref_points, prediction in zip(attn_maps, sampling_locations, reference_points, predictions):
         if prediction.class_id != BUTTON_CLASS_ID:
             continue
         # draw the attention
@@ -164,6 +165,14 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
             image_draw.ellipse(
                 (px - radius, py - radius, px + radius, py + radius),
                 fill=(255, 0, 0, alpha),
+            )
+        for ref_point in ref_points:
+            x, y = ref_point
+            px, py = float(x * W_img), float(y * H_img)
+            radius = 5
+            image_draw.ellipse(
+                (px - radius, py - radius, px + radius, py + radius),
+                fill=(0, 255, 255, 255),
             )
         # then draw the predictions
         if prediction.class_id == BUTTON_CLASS_ID:
@@ -230,6 +239,7 @@ def visualize_one(
     image_name = path.stem
 
     outputs = run_model(model, image, device, inference_size)
+    reference_points = outputs["reference_points"] # [num_queries, RpQ, 2]
     # get the predictions
     button_predictions, hole_predictions = get_predictions(image, outputs)
     print(len(list(filter(lambda p: p.class_id == BUTTON_CLASS_ID, button_predictions))))
@@ -239,7 +249,7 @@ def visualize_one(
     # get the spatial shapes and then visualize the attention
     spatial_shapes = outputs["spatial_shapes"]
     sampling_locations = outputs["sampling_locations"]
-    attn_images = visualize_attention(image, attn_maps, sampling_locations, button_predictions)
+    attn_images = visualize_attention(image, attn_maps, reference_points, sampling_locations, button_predictions)
     fig = create_plot(attn_images)
     fig.savefig(Path(f"visualize/{image_name}_attn.png"), dpi=300)
     # now save the whole image
