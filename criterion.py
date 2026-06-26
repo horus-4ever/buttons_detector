@@ -164,7 +164,10 @@ class SetCriterion(nn.Module):
                 .mean(dim=1)) # take the mean over batches and predictions
             # TODO: Apply here some parameter to control the contribution of each level
             #       We can think of it as a learned parameter inside the network, or hard-coded
-            loss_button = loss_buttons.mean()
+                        # To debug, let's first hardocde them using linspace
+            weights = torch.linspace(0.1, 1, n_layers, device=loss_buttons.device, dtype=loss_buttons.dtype)
+            loss_button = loss_buttons * weights
+            loss_button = loss_button.sum() / weights.sum()
         return {"loss_button": loss_button}
 
 
