@@ -54,7 +54,7 @@ class ButtonDataset(Dataset):
         width = ann["width"]
         height = ann["height"]
 
-        img_path = self.images_dir / f"{name}.jpg"
+        img_path = self.images_dir / f"{name}.png"
         if not img_path.exists():
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
 
@@ -64,7 +64,7 @@ class ButtonDataset(Dataset):
         holes_coords = []
 
         for b, keypoint in zip(buttons, keypoints):
-            center = b # ["center"]
+            center = b["center"]
             button_x = float(center["x_ndc"])
             button_y = 1.0 - float(center["y_ndc"])
             buttons_coords.append([button_x, button_y])

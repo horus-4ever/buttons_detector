@@ -58,7 +58,6 @@ class PRTR(nn.Module):
         self.refpoints_embed = nn.Embedding(nrefpointsperquery, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
         
     def _compute_masks(self, masks, feature_maps):
         """
@@ -107,7 +106,7 @@ class PRTR(nn.Module):
             pos_embed = self.position_embedding(mask)
             position_embeddings.append(pos_embed)
 
-        hs, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points = self.transformer(
+        hs, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, intermediate_reference_points = self.transformer(
             features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
@@ -115,19 +114,13 @@ class PRTR(nn.Module):
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, Q, RpQ, embed_dim]
-        # reference_points: [query_len, RpQ, 2]
-        Q, num_ref_points_per_query, _ = reference_points.size()
         # for the class prediction we can take the mean of the decoder output
         # -> [B, Q, embed_dim]
         class_head_input = hs.mean(dim=2) # take the mean over RpQ
         pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
-        # for the buttons we of course need to keep by RpQ
-        # [B, query_len, RpQ, 2]
-        button_deltas = self.button_head(hs)
-        button_deltas = button_deltas.view(B, Q, num_ref_points_per_query, 2)
-        # print(button_deltas.size(), reference_points.size()) ; exit(0)
-        # here now we have to predict for 2 * RpQ points
-        pred_buttons = (inverse_sigmoid(reference_points) + button_deltas).sigmoid()  # [B, num_queries, RpQ, 2]
+        # the final button location is the last reference point from the last decoder layer
+        # pred_buttons: [query_len, RpQ, 2]
+        pred_buttons = intermediate_reference_points[-1]
 
         return {
             "pred_logits": pred_logits,
@@ -135,7 +128,8 @@ class PRTR(nn.Module):
             "attn_maps": decoder_attn_maps, # decoder_layers * [batch, query_len * RqP, heads, num_levels, num_points]
             "sampling_locations": decoder_sampling_locations, # [batch, query_len, heads, num_levels, num_points, 2]
             "spatial_shapes": spatial_shapes, # [num_levels, 2]
-            "reference_points": reference_points, # [query_len, RpQ, 2]
+            "reference_points": pred_buttons, # [query_len, RpQ, 2]
+            "intermediate_reference_points": intermediate_reference_points, # decoder_layers * [B, query_len, RqP, 2]
             "image_size": (H, W)
         }
 
