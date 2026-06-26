@@ -143,8 +143,9 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
     sampling_locations = sampling_locations.reshape(num_queries, -1, 2)
     attn_maps = attn_maps.reshape(num_queries, -1)
     # create the figure
-    n_col = 4
-    figure, axes = plt.subplots(3, n_col, figsize=(10, 10), dpi=80, squeeze=False)
+    n_col = 5
+    n_lines = (len(list(filter(lambda p: p.class_id == BUTTON_CLASS_ID, predictions))) // n_col) + 1
+    figure, axes = plt.subplots(n_lines, n_col, figsize=(12, 12), dpi=80, squeeze=False)
     for y_ax in axes:
         for ax in y_ax:
             ax.axis('off')
@@ -320,8 +321,8 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
-    model_config_path = Path("model.json")
-    model_weights_path = Path("checkpoints/last.pt")
+    # model_config_path = Path("model.json")
+    # model_weights_path = Path("checkpoints/last.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")
