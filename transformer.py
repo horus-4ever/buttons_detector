@@ -111,4 +111,4 @@ class DeformableTransformer(nn.Module):
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
         # result: [B, query_len, embed_dim]
-        return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points
+        return result, encoder_attention_weights, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, reference_points

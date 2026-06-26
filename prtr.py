@@ -101,7 +101,7 @@ class PRTR(nn.Module):
             pos_embed = self.position_embedding(mask)
             position_embeddings.append(pos_embed)
 
-        hs, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points = self.transformer(
+        hs, encoder_attn_maps, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, reference_points = self.transformer(
             features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
@@ -115,8 +115,10 @@ class PRTR(nn.Module):
         return {
             "pred_logits": pred_logits,
             "pred_buttons": pred_buttons,
-            "attn_maps": decoder_attn_maps, # decoder_layers * [batch, query_len, heads, num_levels, num_points]
-            "sampling_locations": decoder_sampling_locations, # [batch, query_len, heads, num_levels, num_points, 2]
+            "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
+            "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
+            "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries, heads, num_levels, num_points]
+            "decoder_sampling_locations": decoder_sampling_locations, # [batch, num_queries, heads, num_levels, num_points, 2]
             "spatial_shapes": spatial_shapes, # [num_levels, 2]
             "reference_points": reference_points,
             "image_size": (H, W)

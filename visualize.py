@@ -128,7 +128,7 @@ def get_attention_maps(attn_weights):
     return attn_weights
 
 
-def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predictions):
+def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_locations, predictions):
     """
     - attn_maps: [query_len, heads, num_levels, num_points]
     - spatial_shapes: [num_levels, 2]
@@ -160,7 +160,7 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
         for (posx, posy), value in zip(locations, attn_map):
             px = float(posx * W_img)
             py = float(posy * H_img)
-            alpha = int(40 + 215 * float(value))
+            alpha = int(255 * float(value))
             radius = 5
             image_draw.ellipse(
                 (px - radius, py - radius, px + radius, py + radius),
@@ -175,7 +175,7 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
                 fill=(0, 255, 0, 255)
             )
         attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
-        attn_map_image.resize((512, 512))
+        attn_map_image = attn_map_image.resize((512, 512))
         # now add that on the figure
         ax = axes[fig_number // n_col][fig_number % n_col]
         ax.imshow(attn_map_image)
@@ -183,6 +183,46 @@ def visualize_attention(image: Image.Image, attn_maps, sampling_locations, predi
         # increment the number of figures
         fig_number += 1
     return figure
+
+
+def visualize_encoder_attention(image: Image.Image, attn_maps, sampling_locations):
+    """
+    - attn_maps: [query_len, heads, num_levels, num_points]
+    - spatial_shapes: [num_levels, 2]
+    - sampling_locations: [batch, query_len, heads, num_levels, num_points, 2]
+    """
+    image = image.convert("L").convert("RGBA")
+    W_img, H_img = image.size
+    # --> [query_len, heads, num_levels, num_points, 2]
+    sampling_locations = sampling_locations[0] # first image of the batch
+    # flatten that
+    # [query_len, heads, num_levels, num_points, 2] -> [query_len * heads * num_levels * num_points, 2]
+    sampling_locations = sampling_locations.reshape(-1, 2)
+    attn_maps = attn_maps.flatten()
+    # create the figure
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 10), dpi=80)
+    # loop over the queries to have each attention per query
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    image_draw = ImageDraw.Draw(overlay)
+    for index, locations in enumerate(sampling_locations):
+        # get the value
+        value = attn_maps[index]
+        # then draw at the right position
+        posx, posy = locations
+        px = float(posx * W_img)
+        py = float(posy * H_img)
+        alpha = int(40 + 215 * float(value))
+        radius = 1
+        image_draw.ellipse(
+            (px - radius, py - radius, px + radius, py + radius),
+            fill=(255, 0, 0, alpha),
+        )
+    attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
+    attn_map_image = attn_map_image.resize((512, 512))
+    # now add that on the figure
+    ax.imshow(attn_map_image)
+    ax.axis('off')
+    return fig
 
 
 def visualize_predictions(image: Image.Image, predictions):
@@ -219,12 +259,17 @@ def visualize_one(
     print(len(list(filter(lambda p: p.class_id == BUTTON_CLASS_ID, predictions))))
     # normalize the attention maps
     # [query_len, heads, num_levels, num_points], where query_len = 10
-    attn_maps = get_attention_maps(outputs["attn_maps"])
+    decoder_attn_maps = get_attention_maps(outputs["decoder_attn_maps"])
+    encoder_attn_maps = get_attention_maps(outputs["encoder_attn_maps"])
     # get the spatial shapes and then visualize the attention
     spatial_shapes = outputs["spatial_shapes"]
-    sampling_locations = outputs["sampling_locations"]
-    fig = visualize_attention(image, attn_maps, sampling_locations, predictions)
+    decoder_sampling_locations = outputs["decoder_sampling_locations"]
+    encoder_sampling_locations = outputs["encoder_sampling_locations"]
+    fig = visualize_decoder_attention(image, decoder_attn_maps, decoder_sampling_locations, predictions)
     fig.savefig(Path(f"visualize/{image_name}_attn.png"), dpi=300)
+    # same for the encoder maps
+    # fig = visualize_encoder_attention(image, encoder_attn_maps, encoder_sampling_locations)
+    # fig.savefig(Path(f"visualize/{image_name}_encoder_attn.png"), dpi=300)
     # now save the whole image
     img_predictions = visualize_predictions(image, predictions)
     img_predictions.save(Path(f"visualize/{image_name}_pred.png"))
