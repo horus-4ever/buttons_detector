@@ -11,11 +11,20 @@ log_regex = re.compile(
     r".*?\|\s+val loss:\s+(?P<val_loss>\d+(?:\.\d+)?)"
 )
 
+num = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+
 log_regex_2 = re.compile(
-    r"Epoch\s+\[(?P<epoch>\d+)/\d+\]\s*\|\s*"
-    r"train\s*\(\s*loss\s*=\s*(?P<train_loss>\d+(?:\.\d+)?)"
-    r".*?\|\s*"
-    r"val\s*\(\s*loss\s*=\s*(?P<val_loss>\d+(?:\.\d+)?)"
+    rf"Epoch\s+\[(?P<epoch>\d+)/(?P<total_epochs>\d+)\]\s*\|\s*"
+    rf"train\s*\(\s*"
+    rf"loss\s*=\s*(?P<train_loss>{num})\s*,\s*"
+    rf"ce\s*=\s*(?P<train_ce>{num})\s*,\s*"
+    rf"btn\s*=\s*(?P<train_btn>{num})\s*"
+    rf"\)\s*\|\s*"
+    rf"val\s*\(\s*"
+    rf"loss\s*=\s*(?P<val_loss>{num})\s*,\s*"
+    rf"ce\s*=\s*(?P<val_ce>{num})\s*,\s*"
+    rf"btn\s*=\s*(?P<val_btn>{num})\s*"
+    rf"\)"
 )
 
 REGEXES = [log_regex, log_regex_2]
@@ -29,7 +38,21 @@ def parse_log_file(file: Path):
 
 def parse_log_data(log_data):
     log_data = log_data.split("\n")
-    losses = []
+    losses = {
+        "train_losses": {
+            "loss": [],
+            "class_loss": [],
+            "coords_loss": []
+        },
+        "val_losses": {
+            "loss": [],
+            "class_loss": [],
+            "coords_loss": []
+        }
+    }
+    train_losses = losses["train_losses"]
+    val_losses = losses["val_losses"]
+    epochs = 0
     for line in log_data:
         results = [regex.search(line) for regex in REGEXES]
         result = None
@@ -38,18 +61,25 @@ def parse_log_data(log_data):
                 result = match
         if result is None:
             continue
-        epoch = int(result.group("epoch"))
+        epochs += 1
         train_loss = float(result.group("train_loss"))
+        train_class_loss = float(result.group("train_ce"))
+        train_coords_loss = float(result.group("train_btn"))
         validation_loss = float(result.group("val_loss"))
-        losses.append((train_loss, validation_loss))
-    losses = np.stack(losses)
-    return losses
+        validation_class_loss = float(result.group("val_ce"))
+        validation_coords_loss = float(result.group("val_btn"))
+        train_losses["loss"].append(train_loss)
+        train_losses["class_loss"].append(train_class_loss)
+        train_losses["coords_loss"].append(train_coords_loss)
+        val_losses["loss"].append(validation_loss)
+        val_losses["class_loss"].append(validation_class_loss)
+        val_losses["coords_loss"].append(validation_coords_loss)
+    return losses, epochs
 
-def plot_losses(losses):
-    n_epochs = len(losses)
+def plot_losses(losses, n_epochs):
     x_axis = np.arange(1, n_epochs + 1)
-    train_losses = losses[:, 0]
-    val_losses = losses[:, 1]
+    train_losses = losses["train_losses"]["loss"]
+    val_losses = losses["val_losses"]["loss"]
     plt.figure(figsize=(8, 5))
     plt.plot(x_axis, train_losses, marker="o", label="Train loss")
     plt.plot(x_axis, val_losses, marker="o", label="Validation loss")
@@ -73,5 +103,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     log_file = Path(args.log_file)
     # now get and visualize the data
-    parsed_logs = parse_log_file(log_file)
-    plot_losses(parsed_logs)
+    parsed_logs, n_epochs = parse_log_file(log_file)
+    plot_losses(parsed_logs, n_epochs)
