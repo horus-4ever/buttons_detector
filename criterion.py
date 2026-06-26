@@ -131,26 +131,42 @@ class SetCriterion(nn.Module):
 
     def loss_buttons(self, outputs, targets, indices):
         src_coords = outputs["pred_buttons"]  # [B, Q, 2]
-        bs, q, _ = src_coords.shape
+        # NEW: we now define intermediate losses
+        intermediate_refpoints = outputs["intermediate_reference_points"] # num_layers * [B, Q, 2]
+        # -> [num_layers, B, Q, 2]
+        intermediate_refpoints = torch.stack(intermediate_refpoints, dim=0) # [num_layers, B, Q, 2]
+        # split into buttons and keypoints
+        src_button_coords = intermediate_refpoints[:, :, :, :]
 
-        matched_pred = []
-        matched_tgt = []
-
+        matched_button_coords = []
+        matched_button_target = []
+        # get the matched button and keypoint predictions
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) > 0:
-                matched_pred.append(src_coords[b, src_idx])
-                matched_tgt.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-
-        if len(matched_pred) == 0:
-            loss_button = torch.tensor(0.0, device=src_coords.device)
+                matched_button_coords.append(src_button_coords[:, b, src_idx])
+                matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
+        # if there is no predictions, then the loss is null
+        if len(matched_button_coords) == 0:
+            loss_button = src_coords.sum() * 0.0
         else:
-            matched_pred = torch.cat(matched_pred, dim=0)
-            matched_tgt = torch.cat(matched_tgt, dim=0)
-            losses = []
-            for p1, p2 in zip(matched_pred, matched_tgt):
-                losses.append(torch.linalg.vector_norm(p1 - p2))
-            loss_button = torch.stack(losses).mean()
+            # B * [num_layers, n_pred, 2] -> [num_layers, B * n_pred, 2]
+            matched_button_coords = torch.cat(matched_button_coords, dim=1)
+            n_layers, total_pred, _ = matched_button_coords.size()
+
+            # -> [B * n_pred, 2]
+            matched_button_target = torch.cat(matched_button_target, dim=0)
+            # [B * n_pred, 2] -> [num_layers, B * n_pred, 2]
+            matched_button_target = matched_button_target[None, :, :].expand(n_layers, total_pred, 2)
+            # now we define the loss
+            # we first compute two independent losses for buttons and keypoints
+            loss_buttons = (torch.linalg
+                .vector_norm(matched_button_coords - matched_button_target, ord=1, dim=2)
+                .mean(dim=1)) # take the mean over batches and predictions
+            # TODO: Apply here some parameter to control the contribution of each level
+            #       We can think of it as a learned parameter inside the network, or hard-coded
+            loss_button = loss_buttons.mean()
         return {"loss_button": loss_button}
+
 
     def forward(self, outputs, targets):
         indices = self.matcher(outputs, targets)
