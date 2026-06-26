@@ -101,7 +101,7 @@ class DeformableTransformer(nn.Module):
         object_queries = object_queries.expand(B, -1, -1)
         reference_points = self.proj_reference_points(query_embed) # [num_queries, 2]
         reference_points = reference_points.sigmoid() # let them be into 0 and 1
-        result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
+        result, decoder_attn_maps, decoder_sampling_locations, intermediate_reference_points = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
             reference_points=reference_points, # [num_queries, 2]
@@ -111,4 +111,4 @@ class DeformableTransformer(nn.Module):
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
         # result: [B, query_len, embed_dim]
-        return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points
+        return result, decoder_attn_maps, spatial_shapes, decoder_sampling_locations, reference_points, intermediate_reference_points
