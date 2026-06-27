@@ -103,6 +103,28 @@ class YOLODataset:
         return result.getvalue()
 
 
+@dataclass
+class YOLODetectionDataset(YOLODataset):
+    pass
+
+@dataclass
+class YOLOPoseDataset(YOLODataset):
+    keypoints: list[str]
+
+    def to_str(self) -> str:
+        result = StringIO()
+        with redirect_stdout(result):
+            common = super().to_str()
+            print(common)
+            # now print specific items
+            print(f"kpt_shapes: [{len(self.keypoints), 2}]\n")
+            print("kpt_names:")
+            print("  0:")
+            for kpt_name in self.keypoints:
+                print(f"    - {kpt_name}")
+        return result.getvalue()
+
+
 def get_images_and_annotations(images_path: Path, annotations_path: Path):
     generator = annotations_path.glob("*.json")
     annotations_files = []
@@ -357,12 +379,23 @@ if __name__ == "__main__":
     dataset_split = arguments.split
     random_seed = arguments.split_seed
     # convert to the object
-    configuration = YOLODataset(
-        root_path=out,
-        train_path=out / "images" / "train",
-        validation_path=out / "images" / "val",
-        test_path=out / "images" / "test",
-        classes=["button"],
-        dataset_split=DatasetSplit.from_str(dataset_split, random_seed=random_seed)
-    )
+    if mode == "detection":
+        configuration = YOLODetectionDataset(
+            root_path=out,
+            train_path=out / "images" / "train",
+            validation_path=out / "images" / "val",
+            test_path=out / "images" / "test",
+            classes=["button"],
+            dataset_split=DatasetSplit.from_str(dataset_split, random_seed=random_seed)
+        )
+    else:
+        configuration = YOLOPoseDataset(
+            root_path=out,
+            train_path=out / "images" / "train",
+            validation_path=out / "images" / "val",
+            test_path=out / "images" / "test",
+            classes=["button"],
+            dataset_split=DatasetSplit.from_str(dataset_split, random_seed=random_seed),
+            keypoints=["button", "hole"]
+        )
     convert(dataset_path, mode, configuration)
