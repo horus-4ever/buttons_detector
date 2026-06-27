@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, ConcatDataset
 
 from prtr import PRTR
 from criterion import HungarianMatcher, SetCriterion
@@ -165,24 +165,34 @@ def init_finetuner(
     pretrained_path: Path,
     strict_pretrained: bool = True,
 ):
+    """
+    The finetuner takes the parameters from a json file.
+    When finetuning, there is a possibility to choose to mix data with another dataset.
+    In this case, we indicate the percentage of mix into the dataset.
+    WARNING: there must be enough data in the other dataset.
+    """
     training_parameters = model_config["finetuning_parameters"]
     model_parameters = model_config["parameters"]
     model_name = model_config["model_name"]
 
+    # get the training parameters
     dataset_root = training_parameters["dataset"]
+    mix_dataset_root = training_parameters["mix_dataset"]
+    mix_ratio = training_parameters["mix_ratio"]
     batch_size = training_parameters["batch_size"]
     lr = training_parameters["lr"]
     weight_decay = training_parameters["weight_decay"]
     train_split = training_parameters["train_split"]
     num_workers = training_parameters["num_workers"]
     seed = training_parameters["seed"]
-
+    # get the costs of each class
+    # NOTE: the `cost_attn_map` is legacy from a previous model.
     cost_class = training_parameters["cost_class"]
     cost_coord = training_parameters["cost_coord"]
     cost_attn_map = training_parameters["cost_attn_map"]
-
-    val_size = training_parameters.get("val_size", 640)
-    train_sizes = training_parameters.get("train_sizes", [512])
+    # indicate the size to which the images are resized
+    validation_image_size = training_parameters.get("val_size", 512)
+    training_image_sizes = training_parameters.get("train_sizes", [512])
 
     scheduler_step_size = training_parameters.get("scheduler_step_size", 20)
     scheduler_gamma = training_parameters.get("scheduler_gamma", 0.1)
@@ -194,42 +204,53 @@ def init_finetuner(
     torch.manual_seed(seed)
 
     base_dataset = ButtonDataset(dataset_root, transform=None)
+    mix_dataset = ButtonDataset(mix_dataset_root, transform=None)
+    # we first check if there is enough data
+    # first, we get the number of data for training and validation from the base dataset
     n_total = len(base_dataset)
-
-    n_train = int(train_split * n_total)
-    n_val = n_total - n_train
-
-    if n_train <= 0 or n_val <= 0:
-        raise ValueError(
-            f"Invalid split: n_total={n_total}, n_train={n_train}, n_val={n_val}. "
-            f"Check training_parameters['train_split']."
-        )
-
+    n_total_mix = len(mix_dataset)
+    mix_ratio = int(mix_ratio)
+    n_mix_needed = n_total * mix_ratio # this is the number of data we need from the second dataset
+    if n_mix_needed > n_total_mix:
+        raise ValueError(f"The mix dataset must be large enough (need {n_mix_needed}, but there is only {n_total_mix}).")
+    # now, let's generate the dataset
     split_generator = torch.Generator().manual_seed(seed)
-    indices = torch.randperm(n_total, generator=split_generator).tolist()
+    mix_dataset_permutations = torch.randperm(n_total_mix, generator=split_generator).tolist()
+    # sample `n_mix_needed` from the mix dataset
+    mix_dataset_indices = mix_dataset_permutations[:n_mix_needed]
+    mix_subdataset = Subset(mix_dataset, mix_dataset_indices)
 
+    # now combine the two datasets together
+    final_dataset = ConcatDataset([base_dataset, mix_subdataset])
+    # now, split this dataset into training and validation
+    n_total = len(final_dataset)
+    n_train = n_total * float(train_split)
+    n_valid = n_total - n_train
+    # get the indices, then split
+    indices = torch.randperm(n_total, generator=split_generator).tolist()
     train_indices = indices[:n_train]
     val_indices = indices[n_train:]
-
+    # generate the two datasets
     train_dataset = Subset(
         ButtonDataset(
             dataset_root,
-            transform=RandomTrainTransform(sizes=train_sizes),
+            transform=RandomTrainTransform(sizes=training_image_sizes),
         ),
         train_indices,
     )
-
     val_dataset = Subset(
         ButtonDataset(
             dataset_root,
-            transform=make_val_transform(size=val_size),
+            transform=make_val_transform(size=validation_image_size),
         ),
         val_indices,
     )
 
+    # now create the data loaders
+    # first define the random generator for the dataloader
     loader_generator = torch.Generator()
     loader_generator.manual_seed(seed)
-
+    # then define the two data loaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -240,7 +261,6 @@ def init_finetuner(
         worker_init_fn=seed_worker,
         generator=loader_generator,
     )
-
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
@@ -250,7 +270,7 @@ def init_finetuner(
         pin_memory=(device.type == "cuda"),
         worker_init_fn=seed_worker,
     )
-
+    # construct the model and put it to the GPU
     model = PRTR(model_name, **model_parameters)
     model = model.to(device)
 
