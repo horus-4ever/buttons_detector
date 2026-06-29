@@ -305,7 +305,7 @@ def init_finetuner(
         weight_dict={
             "loss_ce": cost_class,
             "loss_button": cost_coord,
-            "loss_attn": cost_attn_map,
+            "loss_attn": 0,
         },
         eos_coef=0.1,
     ).to(device)
