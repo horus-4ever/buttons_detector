@@ -44,3 +44,5 @@ if __name__ == "__main__":
     results = finetune(model, dataset_path, epochs, image_size)
 
 # python3 yolo_finetune.py --model /home/tomtom/Documents/buttons_detector/yolo_models/detection/yolo26l.pt --dataset /home/tomtom/Documents/DATASET_5_YOLO_DETECTION/DATASET_5__detection.yaml --epochs 50 --img-size 512
+
+# python3 yolo_finetune.py --model /home/tomtom/Documents/buttons_detector/yolo_models/pose/yolo26l-pose.pt --dataset /home/tomtom/Documents/DATASET_5_YOLO_KPTS_2/DATASET_5__pose.yaml --epochs 40 --img-size 512

@@ -118,7 +118,7 @@ class YOLOPoseDataset(YOLODataset):
             common = super().to_str()
             print(common)
             # now print specific items
-            print(f"kpt_shapes: [{len(self.keypoints), 2}]\n")
+            print(f"kpt_shape: [{len(self.keypoints)}, 2]\n")
             print("kpt_names:")
             print("  0:")
             for kpt_name in self.keypoints:
@@ -174,11 +174,13 @@ def convert_to_pose(annotation_file: Path):
         origin_x_ndc, origin_y_ndc = origin_x_px / width, origin_y_px / height
         center_x_px, center_y_px = bbox_data["cx_px"], bbox_data["cy_px"]
         center_x_ndc, center_y_ndc = center_x_px / width, center_y_px / height
+        max_x_px, max_y_px = bbox_data["x_max_px"], bbox_data["y_max_px"]
+        max_x_ndc, max_y_ndc = max_x_px / width, max_y_px / height
         # then get the position of the corresponding keypoint
-        kp_x_ndc, kp_y_ndc = keypoint_data["x_ndc"], keypoint_data["y_ndc"]
+        kp_x_ndc, kp_y_ndc = keypoint_data["x_ndc"], 1.0 - keypoint_data["y_ndc"]
         # now get the bounding box for that
         class_index = 0 # there is only one class
-        bounding_box = get_bounding_box(origin_x_ndc, origin_y_ndc, kp_x_ndc, kp_y_ndc)
+        bounding_box = BoundingBox(Point(origin_x_ndc, origin_y_ndc), Point(max_x_ndc, max_y_ndc))
         keypoints = [Point(center_x_ndc, center_y_ndc), Point(kp_x_ndc, kp_y_ndc)] # two keypoints per bounding box
         converted = YOLO_POSE(class_index, bounding_box, keypoints)
         results.append(converted)

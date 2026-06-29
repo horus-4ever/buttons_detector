@@ -493,8 +493,8 @@ if __name__ == "__main__":
 
 """
 python3 scripts/yolodataset_visualize_kpts.py \
-    --image /home/tomtom/Documents/DATASET_5_YOLO_DETECTION/images/train/cloth_5_buttons_00000252.png \
-    --label /home/tomtom/Documents/DATASET_5_YOLO_DETECTION/labels/train/cloth_5_buttons_00000252.txt \
+    --image /home/tomtom/Documents/DATASET_5_YOLO_KPTS/images/train/cloth_5_buttons_00000252.png \
+    --label /home/tomtom/Documents/DATASET_5_YOLO_KPTS/labels/train/cloth_5_buttons_00000252.txt \
     --kpt-dim 2 \
     --names button hole \
     --skeleton "0-1" \
