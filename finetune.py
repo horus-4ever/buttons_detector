@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 import torch
-from torch.utils.data import DataLoader, Subset, ConcatDataset
+from torch.utils.data import Dataset, DataLoader, Subset, ConcatDataset
 
 from prtr import PRTR
 from criterion import HungarianMatcher, SetCriterion
@@ -19,6 +19,43 @@ from train import (
     Trainer,
     format_stats,
 )
+
+class FinetuneDataset(Dataset):
+    def __init__(self, dataset, transform = None):
+        self.dataset = dataset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int):
+        image, target = self.dataset[idx]
+        if self.transform is None:
+            return image, target
+        coords = target["buttons"].tolist()
+        image_id = target["image_id"]
+        image, coords = self.transform(image, coords)
+
+        if torch.is_tensor(coords):
+            target_buttons = coords.to(dtype=torch.float32)
+        elif len(coords) == 0:
+            target_buttons = torch.zeros((0, 2), dtype=torch.float32)
+        else:
+            target_buttons = torch.tensor(coords, dtype=torch.float32)
+
+        if torch.is_tensor(image):
+            out_h, out_w = image.shape[-2:]
+        else:
+            out_w, out_h = image.size
+
+        target = {
+            "labels": torch.zeros((len(target_buttons),), dtype=torch.int64),
+            "buttons": target_buttons,
+            "image_id": image_id,
+            "size": torch.tensor([out_h, out_w], dtype=torch.int64),
+        }
+
+        return image, target
 
 
 def extract_model_state_dict(checkpoint: Any) -> Dict[str, torch.Tensor]:
@@ -186,10 +223,8 @@ def init_finetuner(
     num_workers = training_parameters["num_workers"]
     seed = training_parameters["seed"]
     # get the costs of each class
-    # NOTE: the `cost_attn_map` is legacy from a previous model.
     cost_class = training_parameters["cost_class"]
     cost_coord = training_parameters["cost_coord"]
-    cost_attn_map = training_parameters["cost_attn_map"]
     # indicate the size to which the images are resized
     validation_image_size = training_parameters.get("val_size", 512)
     training_image_sizes = training_parameters.get("train_sizes", [512])
@@ -207,15 +242,15 @@ def init_finetuner(
     mix_dataset = ButtonDataset(mix_dataset_root, transform=None)
     # we first check if there is enough data
     # first, we get the number of data for training and validation from the base dataset
-    n_total = len(base_dataset)
-    n_total_mix = len(mix_dataset)
-    mix_ratio = int(mix_ratio)
-    n_mix_needed = n_total * mix_ratio # this is the number of data we need from the second dataset
-    if n_mix_needed > n_total_mix:
-        raise ValueError(f"The mix dataset must be large enough (need {n_mix_needed}, but there is only {n_total_mix}).")
+    mix_ratio = float(mix_ratio) / 100
+    n_total = int(len(base_dataset) / (1 - mix_ratio))
+    n_mix_needed = int(mix_ratio * n_total)
+
+    if n_mix_needed > len(mix_dataset):
+        raise ValueError(f"The mix dataset must be large enough (need {n_mix_needed}, but there is only {len(base_dataset)}).")
     # now, let's generate the dataset
     split_generator = torch.Generator().manual_seed(seed)
-    mix_dataset_permutations = torch.randperm(n_total_mix, generator=split_generator).tolist()
+    mix_dataset_permutations = torch.randperm(len(mix_dataset), generator=split_generator).tolist()
     # sample `n_mix_needed` from the mix dataset
     mix_dataset_indices = mix_dataset_permutations[:n_mix_needed]
     mix_subdataset = Subset(mix_dataset, mix_dataset_indices)
@@ -223,28 +258,25 @@ def init_finetuner(
     # now combine the two datasets together
     final_dataset = ConcatDataset([base_dataset, mix_subdataset])
     # now, split this dataset into training and validation
+    assert n_total == len(final_dataset)
     n_total = len(final_dataset)
-    n_train = n_total * float(train_split)
+    n_train = int(n_total * float(train_split))
     n_valid = n_total - n_train
     # get the indices, then split
     indices = torch.randperm(n_total, generator=split_generator).tolist()
     train_indices = indices[:n_train]
     val_indices = indices[n_train:]
     # generate the two datasets
-    train_dataset = Subset(
-        ButtonDataset(
-            dataset_root,
-            transform=RandomTrainTransform(sizes=training_image_sizes),
-        ),
-        train_indices,
+    train_dataset = FinetuneDataset(
+        Subset(final_dataset, train_indices),
+        transform=RandomTrainTransform(training_image_sizes)
     )
-    val_dataset = Subset(
-        ButtonDataset(
-            dataset_root,
-            transform=make_val_transform(size=validation_image_size),
-        ),
-        val_indices,
+    val_dataset = FinetuneDataset(
+        Subset(final_dataset, val_indices),
+        transform=make_val_transform(size=validation_image_size)
     )
+
+    print(f"~> finetune on {len(final_dataset)} (mix: {mix_ratio})")
 
     # now create the data loaders
     # first define the random generator for the dataloader
