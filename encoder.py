@@ -96,10 +96,10 @@ class EncoderLayer(nn.Module):
             # first, define with linspace the coordonates
             width_spans = torch.linspace((0.5 / W), (1.0 - 0.5 / W), steps=W, device=device, dtype=dtype)
             height_spans = torch.linspace((0.5 / H), (1.0 - 0.5 / H), steps=H, device=device, dtype=dtype)
-            i_indices, j_indices = torch.meshgrid(height_spans, width_spans)
+            i_indices, j_indices = torch.meshgrid(height_spans, width_spans, indexing="ij")
             # i_indices, j_indices: [H, W]
             # now combine that to obtain the reference points
-            points = torch.stack([i_indices, j_indices]) # [2, H, W]
+            points = torch.stack([j_indices, i_indices]) # [2, H, W]
             # [2, H, W] -> [H, W, 2]
             points = points.permute(1, 2, 0).contiguous()
             # [H * W, 2]

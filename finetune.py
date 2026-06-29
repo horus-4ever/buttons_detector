@@ -154,29 +154,10 @@ def load_pretrained_weights(
         print(f"Unexpected checkpoint tensors: {len(unexpected)}")
 
 
-def set_finetune_trainability(model: torch.nn.Module, training_parameters: Dict[str, Any]):
-    """
-    Optional fine-tuning controls through the JSON config.
-
-    Supported:
-      "freeze_backbone": true/false
-
-    Example:
-      "finetuning_parameters": {
-          "lr": 1e-5,
-          "num_epochs": 10,
-          "freeze_backbone": true
-      }
-    """
-    freeze_backbone = training_parameters.get("freeze_backbone", False)
-
-    if freeze_backbone:
-        for param in model.backbone.parameters():
-            param.requires_grad = False
-
-        print("Backbone frozen for fine-tuning.")
-    else:
-        print("Backbone remains trainable.")
+def freeze_backbone(model):
+    for param in model.backbone.parameters():
+        param.requires_grad = False
+    model.backbone.body.eval()
 
 
 def build_finetune_parameters(model_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -313,7 +294,7 @@ def init_finetuner(
         strict=strict_pretrained,
     )
 
-    set_finetune_trainability(model, training_parameters)
+    freeze_backbone(model)
 
     total_params = sum(p.numel() for p in model.parameters())
     total_params_backbone = sum(p.numel() for p in model.backbone.parameters())

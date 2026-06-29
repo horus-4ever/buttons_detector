@@ -68,7 +68,7 @@ class ButtonDataset(Dataset):
                 y = 1.0 - float(center["y_ndc"])
             else:
                 x = float(center["x_px"]) / float(width)
-                y = float(center["y_px"]) / float(height)
+                y = 1.0 - float(center["y_px"]) / float(height)
 
             coords.append([x, y])
 
@@ -225,6 +225,7 @@ class Trainer:
     def train_one_epoch(self):
         self.model.train()
         self.criterion.train()
+        self.model.backbone.body.eval() # freeze the backbone
 
         running: Dict[str, float] = {}
 

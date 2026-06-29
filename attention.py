@@ -351,10 +351,7 @@ class MultiscaleDeformableAttention(nn.Module):
         sampling_offsets = sampling_offsets.view(batch_size, -1, self.num_heads, self.num_levels, self.num_points, 2)
         # get the sampling points by adding the offsets to the reference points
         spatial_shapes = spatial_shapes.to(device=query.device, dtype=torch.long) # put on the GPU
-        offset_normalizer = torch.stack(
-            [spatial_shapes[:, 0], spatial_shapes[:, 1]],
-            dim=-1,
-        ).to(dtype=query.dtype) # [num_levels, 2] (width, height) for normalizing the offsets
+        offset_normalizer = spatial_shapes[:, [1, 0]].to(device=query.device, dtype=query.dtype) # [num_levels, 2] (width, height) for normalizing the offsets
         offset_normalizer = offset_normalizer.to(dtype=query.dtype)
         sampling_locations = reference_points[:, :, None, :, None, :] + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
         output = self._sample_at_points(v, sampling_locations, spatial_shapes, attn_weights) # [B, Q, heads, num_levels, head_dim]

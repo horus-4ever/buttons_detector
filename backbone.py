@@ -28,12 +28,14 @@ class MultiscaleResNet50(nn.Module):
             return_nodes={
                 "layer1": "feat_s4",
                 "layer2": "feat_s8",
+                "layer3": "feat_s16",
                 "layer4": "feat_s32",
             },
         )
 
         self.proj_s4 = ConvNormAct(256, hidden_dim)
         self.proj_s8 = ConvNormAct(512, hidden_dim)
+        self.proj_s16 = ConvNormAct(1024, hidden_dim)
         self.proj_s32 = ConvNormAct(2048, hidden_dim)
 
     def forward(self, x):
@@ -48,14 +50,16 @@ class MultiscaleResNet50(nn.Module):
 
         feat_s4 = features["feat_s4"]      # [B, 256,  H/4,  W/4]
         feat_s8 = features["feat_s8"]      # [B, 512,  H/8,  W/8]
+        feat_s16 = features["feat_s16"]    # [B, 1024, H/16, W/16]
         feat_s32 = features["feat_s32"]    # [B, 2048, H/32, W/32]
 
         feat_s4 = self.proj_s4(feat_s4)    # [B, hidden_dim, H/4, W/4]
         feat_s8 = self.proj_s8(feat_s8)    # [B, hidden_dim, H/8, W/8]
+        feat_s16 = self.proj_s16(feat_s16) # [B, hidden_dim, H/16, W/16]
         feat_s32 = self.proj_s32(feat_s32) # [B, hidden_dim, H/32, W/32]
 
         features = [
-            feat_s4, feat_s8, feat_s32
+            feat_s4, feat_s8, feat_s16, feat_s32
         ]
 
         return features

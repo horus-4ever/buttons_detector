@@ -66,7 +66,7 @@ class HungarianMatcher(nn.Module):
 
             # Coordinate cost
             # out_coord[b]: [Q, 2], tgt_coords: [num_gt, 2]
-            cost_coord = torch.cdist(out_coord[b], tgt_coords, p=2)
+            cost_coord = torch.cdist(out_coord[b], tgt_coords, p=1)
             # Total cost
             C = self.cost_class * cost_class + self.cost_coord * cost_coord
             C = C.cpu()
@@ -146,10 +146,7 @@ class SetCriterion(nn.Module):
         else:
             matched_pred = torch.cat(matched_pred, dim=0)
             matched_tgt = torch.cat(matched_tgt, dim=0)
-            losses = []
-            for p1, p2 in zip(matched_pred, matched_tgt):
-                losses.append(torch.linalg.vector_norm(p1 - p2))
-            loss_button = torch.stack(losses).mean()
+            loss_button = F.l1_loss(matched_pred, matched_tgt, reduction="none").sum(-1).mean()
         return {"loss_button": loss_button}
 
     def forward(self, outputs, targets):

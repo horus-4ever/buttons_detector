@@ -41,7 +41,7 @@ class PRTR(nn.Module):
         self.transformer = DeformableTransformer(
             d_model=self.d_model,
             nheads=n_heads,
-            nlevels=3,
+            nlevels=4,
             npoints=n_points,
             encoder_nlayers=n_encoder_layers,
             decoder_nlayers=n_decoder_layers,
@@ -53,6 +53,11 @@ class PRTR(nn.Module):
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.backbone.body.eval()
+        return self
         
     def _compute_masks(self, masks, feature_maps):
         """
