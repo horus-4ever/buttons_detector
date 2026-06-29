@@ -67,7 +67,7 @@ def load_image(annotation_path: Path, path: Path):
         for b in buttons:
             center = b # ["center"]
             x = float(center["x_px"]) / float(width)
-            y = float(center["y_px"]) / float(height)
+            y = 1.0 - float(center["y_px"]) / float(height)
             coordinates.append([x, y])
     # convert to torch tensors
     coordinates = torch.tensor(coordinates) # [nb_gt, 2]
@@ -165,23 +165,51 @@ def evaluate_one(
     cost_class: float,
     cost_coord: float,
 ):
+    """
+    For the evaluation, since we don't have bounding boxes,
+    we will consider that a prediction is valid if it is in a 10 pixel radius.
+    We also define a confidence threshold of 95%.
+    """
     image, annotation = load_image(annotation_path, image_path)
     image_name = image_path.stem
-    # put the costs into a dict
-    weights_dict = {
-        "loss_ce": cost_class,
-        "loss_button": cost_coord
-    }
-    # create the matcher
-    matcher = HungarianMatcher(cost_class=cost_class, cost_coord=cost_coord)
-    criterion = SetCriterion(1, matcher, weights_dict)
+    W, H = image.size
     # run the model and get the output
     outputs = run_model(model, image, device, inference_size)
-    # get the predictions
-    # we have a batch of 1 so we but the annotations into a list
-    annotation = [annotation]
-    losses = criterion(outputs, annotation)
-    return losses
+    predictions = outputs["pred_buttons"][0]
+    pred_probabilities = outputs["pred_logits"][0].softmax(-1)
+    button_probabilities = pred_probabilities[:, 0]
+    # sort by confidence
+    order = torch.argsort(button_probabilities, descending=True)
+    predictions = predictions[order]
+    button_probabilities = button_probabilities[order]
+    # now get the targets
+    targets = annotation["buttons"]
+    matched_targets = torch.zeros(len(targets), dtype=torch.bool)
+    # now go over the annotations
+    TP = 0
+    FP = 0
+    FN = 0
+    for confidence, (x, y) in zip(button_probabilities, predictions):
+        if confidence < 0.95:
+            continue
+        x, y = x * W, y * H
+        best_i = None
+        best_distance = float("inf")
+        for i, (target_x, target_y) in enumerate(targets):
+            target_x, target_y = target_x * W, target_y * H
+            if matched_targets[i]:
+                continue
+            distance = math.dist((x, y), (target_x, target_y))
+            if distance <= 10 and distance < best_distance:
+                best_distance = distance
+                best_i = i
+        if best_i is not None:
+            TP += 1
+            matched_targets[best_i] = True
+        else:
+            FP += 1
+    FN = (~matched_targets).sum()
+    return TP, FP, FN
 
 
 def evaluate_directory(
@@ -198,8 +226,10 @@ def evaluate_directory(
     # now perform a few operation to get the losses
     # first, report the mean button loss of the buttons
     mean_button_loss = 0.0
-    for annotation_path, image_path in image_files:
-        losses = evaluate_one(
+    TPs, FPs, FNs = 0, 0, 0
+    nb_image = len(image_files)
+    for i, (annotation_path, image_path) in enumerate(image_files):
+        TP, FP, FN = evaluate_one(
             annotation_path=annotation_path,
             image_path=image_path,
             model=model,
@@ -208,14 +238,26 @@ def evaluate_directory(
             cost_class=cost_class,
             cost_coord=cost_coord
         )
-        mean_button_loss += losses["loss_button"]
-    mean_button_loss /= len(image_files)
-    print(f"# Mean button loss (mean norm 2 distance): {mean_button_loss}")
+        TPs += TP
+        FPs += FP
+        FNs += FN
+        precision = TPs / (TPs + FPs)
+        recall = TPs / (TPs + FNs)
+        F1 = (2 * TPs) / (2 * TPs + FPs + FNs)
+        print(f"Eval[{i:<5}/{nb_image}]: precision={precision:.4f}, recall={recall:.4f}, F1={F1:.4f}", end="\r")
+    # then report precision, recall and F1
+    precision = TPs / (TPs + FPs)
+    recall = TPs / (TPs + FNs)
+    F1 = (2 * TPs) / (2 * TPs + FPs + FNs)
+    print("Evaluation report:")
+    print(f"- precision: {precision:.4f}")
+    print(f"- recall: {recall:.4f}")
+    print(f"- F1: {F1:.4f}")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Visualize DETR-style PRTR button predictions and decoder attention maps."
+        description="Evaluate DETR-style model."
     )
 
     parser.add_argument(
@@ -230,7 +272,7 @@ def parse_args():
         "-i",
         "--input",
         type=str,
-        default="dataset/real",
+        default="dataset_finetune",
         help="Image stem, image path, or directory.",
     )
 
@@ -239,13 +281,6 @@ def parse_args():
         type=int,
         default=INFERENCE_SIZE,
         help="Input resolution used at inference.",
-    )
-
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=OUTPUT_DIR,
-        help="Directory where visualizations are saved.",
     )
     return parser.parse_args()
 
