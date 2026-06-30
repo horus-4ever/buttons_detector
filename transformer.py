@@ -88,14 +88,14 @@ class DeformableTransformer(nn.Module):
         # make the spatial shapes be a tensor
         spatial_shapes = torch.tensor(spatial_shapes, device=query_embed.device)
         # forward of encoder
-        memory, encoder_attention_weights, encoder_sampling_locations = self.encoder(
+        encoder_memory, encoder_attention_weights, encoder_sampling_locations = self.encoder(
             input=feat_flatten, # [batch, sum_l(Hl * Wl), embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             pos_embed=pos_flatten, # [B, embed_dim, sum_l(Hl, Wl)]
             src_key_padding_mask=mask_flatten, # [B, 1, sum_l(Hl, Wl)]
         ) # [B, sum_l(Hl * Wl), embed_dim]
 
-        B, Q, C = memory.size()
+        B, Q, C = encoder_memory.size()
         # now prepare the input to the decoder
         object_queries = torch.zeros_like(query_embed) # [num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
@@ -103,7 +103,7 @@ class DeformableTransformer(nn.Module):
         reference_points = reference_points.sigmoid() # let them be into 0 and 1
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
-            memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
+            memory=encoder_memory, # [B, sum_l(Hl * Wl), embed_dim]
             reference_points=reference_points, # [num_queries, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             queries_pos=query_embed, # [num_queries, embed_dim]
@@ -111,4 +111,4 @@ class DeformableTransformer(nn.Module):
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
         # result: [B, query_len, embed_dim]
-        return result, encoder_attention_weights, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, reference_points
+        return result, encoder_memory, encoder_attention_weights, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, reference_points
