@@ -136,6 +136,7 @@ def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_location
     """
     image = image.convert("L").convert("RGBA")
     W_img, H_img = image.size
+    image = image.resize((512, 512))
     num_queries, num_heads, num_levels, num_points = attn_maps.size()
     # --> [query_len, heads, num_levels, num_points, 2]
     sampling_locations = sampling_locations[0] # first image of the batch
@@ -168,14 +169,14 @@ def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_location
             )
         # then draw the predictions
         if prediction.class_id == BUTTON_CLASS_ID:
-            x, y = prediction.pos_x, prediction.pos_y
+            x, y = prediction.pos_x / W_img * 512, prediction.pos_y / H_img * 512
             radius = 10
             image_draw.ellipse(
                 (x - radius, y - radius, x + radius, y + radius),
                 fill=(0, 255, 0, 255)
             )
         attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
-        attn_map_image = attn_map_image.resize((512, 512))
+        attn_map_image = attn_map_image
         # now add that on the figure
         ax = axes[fig_number // n_col][fig_number % n_col]
         ax.imshow(attn_map_image)
@@ -227,12 +228,12 @@ def visualize_encoder_attention(image: Image.Image, attn_maps, sampling_location
 
 def visualize_predictions(image: Image.Image, predictions):
     W, H = image.size
-    result_image= image.copy()
+    result_image= image.copy().resize((512, 512)).convert("RGBA")
     blackboard = ImageDraw.Draw(result_image)
     for prediction in predictions:
         if prediction.class_id != BUTTON_CLASS_ID:
             continue
-        x, y = prediction.pos_x, prediction.pos_y
+        x, y = prediction.pos_x / W * 512, prediction.pos_y / H * 512
         radius = 5
         blackboard.ellipse(
             (x - radius, y - radius, x + radius, y + radius),
@@ -266,13 +267,13 @@ def visualize_one(
     decoder_sampling_locations = outputs["decoder_sampling_locations"]
     encoder_sampling_locations = outputs["encoder_sampling_locations"]
     fig = visualize_decoder_attention(image, decoder_attn_maps, decoder_sampling_locations, predictions)
-    fig.savefig(Path(f"visualize/{image_name}_attn.png"), dpi=300)
+    fig.savefig(output_dir / f"{image_name}_attn.png", dpi=300)
     # same for the encoder maps
     # fig = visualize_encoder_attention(image, encoder_attn_maps, encoder_sampling_locations)
     # fig.savefig(Path(f"visualize/{image_name}_encoder_attn.png"), dpi=300)
     # now save the whole image
     img_predictions = visualize_predictions(image, predictions)
-    img_predictions.save(Path(f"visualize/{image_name}_pred.png"))
+    img_predictions.save(output_dir / f"{image_name}_pred.png")
 
 def visualize_directory(
     directory: Path,
@@ -366,8 +367,8 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
-    model_config_path = Path("model.json")
-    model_weights_path = Path("finetune_checkpoints/last.pt")
+    #model_config_path = Path("model.json")
+    #model_weights_path = Path("finetune_checkpoints/last.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")
