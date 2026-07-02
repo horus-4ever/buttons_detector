@@ -25,31 +25,31 @@ class HungarianMatcher(nn.Module):
         """
         outputs:
             pred_logits: [B, Q, C+1]
-            pred_buttons: [B, Q, 2]
+            pred_buttons: [B, Q, 4]
 
         targets:
             list of dicts with:
                 labels: [num_gt]
-                buttons: [num_gt, 2]
+                buttons: [num_gt, 4]
 
         Returns:
             list of size B, each element is (pred_indices, target_indices)
         """
         pred_logits = outputs["pred_logits"]      # [B, Q, C+1]
-        pred_buttons = outputs["pred_buttons"]    # [B, Q, 2]
+        pred_buttons = outputs["pred_boxes"]    # [B, Q, 4]
 
         bs, num_queries = pred_logits.shape[:2] # predictions, get the batch size
 
         # Convert logits to probabilities
         out_prob = pred_logits.softmax(-1)  # [B, Q, C+1]
-        out_coord = pred_buttons            # [B, Q, 2]
+        out_coord = pred_buttons            # [B, Q, 4]
 
         indices = []
 
         for b in range(bs):
             tgt_labels = targets[b]["labels"]     # [num_gt] number of ground-truth buttons (2, 3, 4, 5, 6, 7)
             # print(tgt_labels)
-            tgt_coords = targets[b]["buttons"]    # [num_gt, 2]
+            tgt_coords = targets[b]["buttons"]    # [num_gt, 4]
             # print(tgt_coords)
 
             if tgt_coords.numel() == 0:
@@ -65,7 +65,7 @@ class HungarianMatcher(nn.Module):
             cost_class = -out_prob[b][:, tgt_labels]
 
             # Coordinate cost
-            # out_coord[b]: [Q, 2], tgt_coords: [num_gt, 2]
+            # out_coord[b]: [Q, 4], tgt_coords: [num_gt, 4]
             cost_coord = torch.cdist(out_coord[b], tgt_coords, p=1)
             # Total cost
             C = self.cost_class * cost_class + self.cost_coord * cost_coord
@@ -130,7 +130,7 @@ class SetCriterion(nn.Module):
         return {"loss_ce": loss_ce}
 
     def loss_buttons(self, outputs, targets, indices):
-        src_coords = outputs["pred_buttons"]  # [B, Q, 2]
+        src_coords = outputs["pred_boxes"]  # [B, Q, 4]
         bs, q, _ = src_coords.shape
 
         matched_pred = []

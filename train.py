@@ -65,16 +65,22 @@ class ButtonDataset(Dataset):
 
         for b in buttons:
             center = b
+            box = b
             if "center" in center:
                 center = b["center"]
+                box = b["bbox"]
             if "x_ndc" in center and "y_ndc" in center:
                 x = float(center["x_ndc"])
                 y = 1.0 - float(center["y_ndc"])
+                w = float(box["width_px"]) / float(width)
+                h = float(box["height_px"]) / float(height)
             else:
                 x = float(center["x_px"]) / float(width)
                 y = 1.0 - float(center["y_px"]) / float(height)
+                w = float(center["width_px"]) / float(width)
+                h = float(center["height_px"]) / float(height)
 
-            coords.append([x, y])
+            coords.append([x, y, w, h])
 
         image = Image.open(img_path).convert("RGB")
 
@@ -85,7 +91,7 @@ class ButtonDataset(Dataset):
         if torch.is_tensor(coords):
             target_buttons = coords.to(dtype=torch.float32)
         elif len(coords) == 0:
-            target_buttons = torch.zeros((0, 2), dtype=torch.float32)
+            target_buttons = torch.zeros((0, 4), dtype=torch.float32)
         else:
             target_buttons = torch.tensor(coords, dtype=torch.float32)
 

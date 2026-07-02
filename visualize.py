@@ -36,6 +36,8 @@ class Prediction:
     class_id: int
     pos_x: float
     pos_y: float
+    bbox_w: float
+    bbox_h: float
     confidence: float
     query: int
 
@@ -80,10 +82,12 @@ def preprocess_image(image: Image.Image, inference_size: int) -> torch.Tensor:
     return transform(image).unsqueeze(0)
 
 
-def normalized_to_pixel_xy(xy: torch.Tensor, width: int, height: int) -> tuple[float, float]:
+def normalized_to_pixel_xy(xy: torch.Tensor, width: int, height: int) -> tuple[float, float, float, float]:
     x = float(xy[0]) * width
     y = float(xy[1]) * height
-    return x, y
+    w = float(xy[2]) * width
+    h = float(xy[3]) * height
+    return x, y, w, h
 
 
 @torch.no_grad()
@@ -100,7 +104,7 @@ def get_predictions(image, outputs):
     width, height = image.size
     # put on the CPU, and we have only one batch
     pred_logits = outputs["pred_logits"][0].detach().cpu()      # [Q, C + 1]
-    pred_buttons = outputs["pred_buttons"][0].detach().cpu()    # [Q, 2]
+    pred_buttons = outputs["pred_buttons"][0].detach().cpu()    # [Q, 4]
     # transforms to probabilities
     pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
     pred_classes = pred_probs.argmax(dim=-1)
@@ -112,8 +116,8 @@ def get_predictions(image, outputs):
         class_id = int(pred_classes[query_idx])
         confidence = float(pred_probs[query_idx, BUTTON_CLASS_ID])
         xy_norm_tensor = pred_buttons[query_idx]
-        pos_x, pos_y = normalized_to_pixel_xy(xy_norm_tensor, width, height)
-        predictions.append(Prediction(class_id, pos_x, pos_y, confidence, query_idx))
+        pos_x, pos_y, bbox_w, bbox_h = normalized_to_pixel_xy(xy_norm_tensor, width, height)
+        predictions.append(Prediction(class_id, pos_x, pos_y, bbox_w, bbox_h, confidence, query_idx))
     return predictions
 
 
@@ -233,11 +237,11 @@ def visualize_predictions(image: Image.Image, predictions):
     for prediction in predictions:
         if prediction.class_id != BUTTON_CLASS_ID:
             continue
-        x, y = prediction.pos_x / W * 512, prediction.pos_y / H * 512
-        radius = 5
-        blackboard.ellipse(
-            (x - radius, y - radius, x + radius, y + radius),
-            fill=(0, 255, 0, 255)
+        x, y, w, h = prediction.pos_x / W * 512, prediction.pos_y / H * 512, prediction.bbox_w / W * 512, prediction.bbox_h / H * 512
+        blackboard.rectangle(
+            (x - w/2, y - h/2, x + w/2, y + h/2),
+            outline=(0, 255, 0, 255),
+            width=2
         )
     return result_image
 
