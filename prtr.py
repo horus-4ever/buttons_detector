@@ -52,7 +52,8 @@ class PRTR(nn.Module):
         self.query_embed = nn.Embedding(num_queries, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 2, mlp_num_layers)
+        # NEW: the button head now predicts the bounding box
+        self.button_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -113,13 +114,20 @@ class PRTR(nn.Module):
             query_embed=self.query_embed.weight, # [num_queries, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
+        # reference_points: [num_queries, 2]
+        # NEW: the button head now predicts the bounding box
         pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
-        button_deltas = self.button_head(hs)
-        pred_buttons = (inverse_sigmoid(reference_points) + button_deltas).sigmoid()  # [B, num_queries, 2]
+        button_deltas = self.button_head(hs) # [B, num_queries, 4]
+        # take the button centers, which are the first two coordinates
+        button_centers = button_deltas[..., :2] # [B, num_queries, 2]
+        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, num_queries, 2]
+        # now the width and height is given by the last two coordinates
+        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, num_queries, 2]
+        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, num_queries, 4]
 
         return {
             "pred_logits": pred_logits,
-            "pred_buttons": pred_buttons,
+            "pred_boxes": pred_boxes,
             "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
             "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
             "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries, heads, num_levels, num_points]
