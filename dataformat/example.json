@@ -1,0 +1,34 @@
+{
+    "image": {
+        "url": "images/shirt_example.jpg",
+        "width": 800,
+        "height": 600
+    },
+    "cloth": {
+        "type": "shirt",
+        "segmentation": "images/shirt_example__segmentation.png",
+        "pairs": [
+            {
+                "button": {
+                    "visible": true,
+                    "bbox": {
+                        "cx_ndc": 0.5,
+                        "cy_ndc": 0.5,
+                        "width_ndc": 0.1,
+                        "height_ndc": 0.1
+                    }
+                },
+                "fastener": {
+                    "type": "velcro",
+                    "visible": true,
+                    "bbox": {
+                        "cx_ndc": 0.5,
+                        "cy_ndc": 0.5,
+                        "width_ndc": 0.1,
+                        "height_ndc": 0.1
+                    }
+                }
+            }
+        ]
+    }
+}
