@@ -104,7 +104,7 @@ def get_predictions(image, outputs):
     width, height = image.size
     # put on the CPU, and we have only one batch
     pred_logits = outputs["pred_logits"][0].detach().cpu()      # [Q, C + 1]
-    pred_buttons = outputs["pred_buttons"][0].detach().cpu()    # [Q, 4]
+    pred_buttons = outputs["pred_boxes"][0].detach().cpu()    # [Q, 4]
     # transforms to probabilities
     pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
     pred_classes = pred_probs.argmax(dim=-1)
@@ -371,8 +371,8 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
-    #model_config_path = Path("model.json")
-    #model_weights_path = Path("finetune_checkpoints/last.pt")
+    model_config_path = Path("model.json")
+    model_weights_path = Path("checkpoints/best.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")
