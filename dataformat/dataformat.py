@@ -23,6 +23,17 @@ class BoundingBox:
             w=json_data["width_ndc"],
             h=json_data["height_ndc"]
         )
+    
+    def to_x1y1x2y2(self) -> tuple[float, float, float, float]:
+        """
+        Converts the bounding box from center coordinates to corner coordinates.
+        Returns a tuple of (x1, y1, x2, y2).
+        """
+        x1 = self.cx - self.w / 2
+        y1 = self.cy - self.h / 2
+        x2 = self.cx + self.w / 2
+        y2 = self.cy + self.h / 2
+        return (x1, y1, x2, y2)
 
 
 @dataclass
