@@ -61,26 +61,25 @@ class ButtonDataset(Dataset):
             raise FileNotFoundError(f"Missing image for annotation: {img_path}")
 
         buttons = ann.get("buttons", [])
-        coords = []
+        keypoints = ann.get("keypoints", [])
+        buttons_coords = []
+        holes_coords = []
 
-        for b in buttons:
+        for b, keypoint in zip(buttons, keypoints):
             center = b
             box = b
             if "center" in center:
                 center = b["center"]
                 box = b["bbox"]
-            if "x_ndc" in center and "y_ndc" in center:
-                x = float(center["x_ndc"])
-                y = 1.0 - float(center["y_ndc"])
-                w = float(box["width_px"]) / float(width)
-                h = float(box["height_px"]) / float(height)
-            else:
-                x = float(center["x_px"]) / float(width)
-                y = 1.0 - float(center["y_px"]) / float(height)
-                w = float(center["width_px"]) / float(width)
-                h = float(center["height_px"]) / float(height)
-
-            coords.append([x, y, w, h])
+            button_x = float(center["x_ndc"])
+            button_y = 1.0 - float(center["y_ndc"])
+            button_w = float(box["width_px"]) / float(width)
+            button_h = float(box["height_px"]) / float(height)
+            # now take the keypoint coordinates
+            hole_x = float(keypoint["x_ndc"])
+            hole_y = 1.0 - float(keypoint["y_ndc"])
+            holes_coords.append([hole_x, hole_y])
+            buttons_coords.append([button_x, button_y, button_w, button_h])
 
         image = Image.open(img_path).convert("RGB")
 

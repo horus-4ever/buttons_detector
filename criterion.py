@@ -98,13 +98,18 @@ class HungarianMatcher(nn.Module):
             list of size B, each element is (pred_indices, target_indices)
         """
         pred_logits = outputs["pred_logits"]      # [B, Q, C+1]
-        pred_buttons = outputs["pred_boxes"]    # [B, Q, 4]
+        # WARNING: now, the predictions are of shape [B, Q, RqP, 4]
+        pred_positions = outputs["pred_boxes"]    # [B, Q, RqP, 4]
+        # we split into buttons and keypoints
+        pred_buttons = pred_positions[:, :, 0, :] # [B, Q, 4]
+        pred_keypoints = pred_positions[:, :, 1, :] # [B, Q, 4]
 
         bs, num_queries = pred_logits.shape[:2] # predictions, get the batch size
 
         # Convert logits to probabilities
         out_prob = pred_logits.softmax(-1)  # [B, Q, C+1]
         out_coord = pred_buttons            # [B, Q, 4]
+        pred_holes = pred_keypoints
 
         indices = []
 
@@ -112,6 +117,7 @@ class HungarianMatcher(nn.Module):
             tgt_labels = targets[b]["labels"]     # [num_gt] number of ground-truth buttons (2, 3, 4, 5, 6, 7)
             # print(tgt_labels)
             tgt_coords = targets[b]["buttons"]    # [num_gt, 4]
+            tgt_holes = targets[b]["keypoints"]
             # print(tgt_coords)
 
             if tgt_coords.numel() == 0:
@@ -129,8 +135,9 @@ class HungarianMatcher(nn.Module):
             # Coordinate cost
             # out_coord[b]: [Q, 4], tgt_coords: [num_gt, 4]
             cost_coord = torch.cdist(out_coord[b], tgt_coords, p=1)
+            cost_hole = torch.cdist(pred_holes[b], tgt_holes, p=1)
             # Total cost
-            C = self.cost_class * cost_class + self.cost_coord * cost_coord
+            C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole)
             C = C.cpu()
 
             pred_ind, tgt_ind = linear_sum_assignment(C)
@@ -192,39 +199,71 @@ class SetCriterion(nn.Module):
         return {"loss_ce": loss_ce}
 
     def loss_buttons(self, outputs, targets, indices):
-        src_coords = outputs["pred_boxes"]  # [B, Q, 4]
+        # WARNING: outputs are now of shape [B, Q, RqP, 4]
+        src_coords = outputs["pred_buttons"]  # [B, Q, RqP, 4]
+        # split into buttons and keypoints
+        src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
+        src_keypoints_coords = src_coords[:, :, 1, :] # [B, Q, 4]
 
-        matched_pred = []
-        matched_tgt = []
-
+        matched_button_coords = []
+        matched_keypoints_coords = []
+        matched_button_target = []
+        matched_keypoints_target = []
+        # get the matched button and keypoint predictions
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) > 0:
-                matched_pred.append(src_coords[b, src_idx])
-                matched_tgt.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-
-        if len(matched_pred) == 0:
+                matched_button_coords.append(src_button_coords[b, src_idx])
+                matched_keypoints_coords.append(src_keypoints_coords[b, src_idx])
+                matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
+                matched_keypoints_target.append(targets[b]["keypoints"][tgt_idx].to(src_coords.device))
+        # if there is no predictions, then the loss is null
+        if len(matched_button_coords) == 0:
             loss_button = torch.tensor(0.0, device=src_coords.device)
         else:
-            matched_pred = torch.cat(matched_pred, dim=0)
-            matched_tgt = torch.cat(matched_tgt, dim=0)
-            loss_button = F.l1_loss(matched_pred, matched_tgt, reduction="none").sum(-1).mean()
+            # [B, Q, 4] -> [B * Q, 4]
+            matched_button_coords = torch.cat(matched_button_coords, dim=0)
+            # [B, Q, 4] -> [B * Q, 4]
+            matched_keypoints_coords = torch.cat(matched_keypoints_coords, dim=0)
+            matched_button_target = torch.cat(matched_button_target, dim=0)
+            matched_keypoints_target = torch.cat(matched_keypoints_target, dim=0)
+            # now we define the loss
+            # we first compute two independent losses for buttons and keypoints
+            loss_buttons = F.l1_loss(matched_button_coords, matched_button_target)
+            loss_keypoints = F.l1_loss(matched_keypoints_coords, matched_keypoints_target)
+            loss_button = loss_buttons + loss_keypoints
         return {"loss_button": loss_button}
     
     def loss_giou(self, outputs, targets, indices):
-        src_coords = outputs["pred_boxes"]  # [B, Q, 4] (cx, cy, w, h)
-        matched_pred = []
-        matched_tgt = []
+        # WARNING: outputs are now of shape [B, Q, RqP, 4]
+        src_coords = outputs["pred_buttons"]  # [B, Q, RqP, 4]
+        # split into buttons and keypoints
+        src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
+        src_keypoints_coords = src_coords[:, :, 1, :] # [B, Q, 4]
+
+        matched_button_coords = []
+        matched_keypoints_coords = []
+        matched_button_target = []
+        matched_keypoints_target = []
+        # get the matched button and keypoint predictions
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) > 0:
-                matched_pred.append(src_coords[b, src_idx])
-                matched_tgt.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-        # now that we have the predictions and targets, we compute the GIoU loss
-        giou_loss = 0.0
-        if len(matched_pred) > 0:
-            matched_pred = torch.cat(matched_pred, dim=0)
-            matched_tgt = torch.cat(matched_tgt, dim=0)
-            giou = compute_giou(matched_pred, matched_tgt)
-            giou_loss = (1 - giou).mean()
+                matched_button_coords.append(src_button_coords[b, src_idx])
+                matched_keypoints_coords.append(src_keypoints_coords[b, src_idx])
+                matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
+                matched_keypoints_target.append(targets[b]["keypoints"][tgt_idx].to(src_coords.device))
+        # if there is no predictions, then the loss is null
+        if len(matched_button_coords) == 0:
+            giou_loss = torch.tensor(0.0, device=src_coords.device)
+        else:
+            matched_pred_buttons = torch.cat(matched_button_coords, dim=0)
+            matched_pred_keypoints = torch.cat(matched_keypoints_coords, dim=0)
+            matched_tgt_buttons = torch.cat(matched_button_target, dim=0)
+            matched_tgt_keypoints = torch.cat(matched_keypoints_target, dim=0)
+            giou_buttons = compute_giou(matched_pred_buttons, matched_tgt_buttons)
+            giou_buttons_loss = (1 - giou_buttons).mean()
+            giou_keypoints = compute_giou(matched_pred_keypoints, matched_tgt_keypoints)
+            giou_keypoints_loss = (1 - giou_keypoints).mean()
+            giou_loss = giou_buttons_loss + giou_keypoints_loss
         return {"loss_giou": giou_loss}
 
 
