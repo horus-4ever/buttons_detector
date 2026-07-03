@@ -348,7 +348,7 @@ def init_trainer(model_config):
 
     cost_class = training_parameters["cost_class"]
     cost_coord = training_parameters["cost_coord"]
-    cost_attn_map = training_parameters["cost_attn_map"]
+    cost_giou = training_parameters["cost_giou"]
 
     val_size = training_parameters.get("val_size", 512)
 
@@ -433,7 +433,7 @@ def init_trainer(model_config):
         weight_dict={
             "loss_ce": cost_class,
             "loss_button": cost_coord,
-            "loss_attn": cost_attn_map,
+            "loss_giou": cost_giou
         },
         eos_coef=0.1,
     ).to(device)

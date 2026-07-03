@@ -5,6 +5,68 @@ from typing import Any, List, Dict, Mapping
 from scipy.optimize import linear_sum_assignment
 
 
+def compute_intersect(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
+    """
+    Computes the intersection area between two boxes.
+    - box1: [B, 4] (cx, cy, w, h)
+    - box2: [B, 4] (cx, cy, w, h)
+    """
+    # computes the intersection area between two boxes
+    x1 = torch.max(box1[..., 0] - box1[..., 2] / 2, box2[..., 0] - box2[..., 2] / 2)
+    y1 = torch.max(box1[..., 1] - box1[..., 3] / 2, box2[..., 1] - box2[..., 3] / 2)
+    x2 = torch.min(box1[..., 0] + box1[..., 2] / 2, box2[..., 0] + box2[..., 2] / 2)
+    y2 = torch.min(box1[..., 1] + box1[..., 3] / 2, box2[..., 1] + box2[..., 3] / 2)
+    inter_area = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
+    return inter_area
+
+def compute_union(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
+    """
+    Computes the union area between two boxes.
+    - box1: [B, 4] (cx, cy, w, h)
+    - box2: [B, 4] (cx, cy, w, h)
+    """
+    # computes the union area between two boxes
+    area1 = box1[..., 2] * box1[..., 3]
+    area2 = box2[..., 2] * box2[..., 3]
+    inter_area = compute_intersect(box1, box2)
+    union_area = area1 + area2 - inter_area
+    return union_area
+
+
+def compute_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
+    """
+    Computes the Intersection over Union between two boxes.
+    - box1: [B, 4] (cx, cy, w, h)
+    - box2: [B, 4] (cx, cy, w, h)
+    """
+    intersection = compute_intersect(box1, box2)
+    union = compute_union(box1, box2)
+    iou = intersection / (union + 1e-6) # add a small epsilon to avoid zero divisions
+    return iou
+
+
+def compute_giou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the Generalized Intersection over Union between two boxes.
+    - box1: [B, 4] (cx, cy, w, h)
+    - box2: [B, 4] (cx, cy, w, h)
+    """
+    # first we need to compute the large box that contains both boxes
+    # we can do that by taking the min and max of the corners of the boxes
+    x1 = torch.min(box1[..., 0] - box1[..., 2] / 2, box2[..., 0] - box2[..., 2] / 2)
+    y1 = torch.min(box1[..., 1] - box1[..., 3] / 2, box2[..., 1] - box2[..., 3] / 2)
+    x2 = torch.max(box1[..., 0] + box1[..., 2] / 2, box2[..., 0] + box2[..., 2] / 2)
+    y2 = torch.max(box1[..., 1] + box1[..., 3] / 2, box2[..., 1] + box2[..., 3] / 2)
+    # convert to a box
+    large_box = torch.stack([x1, y1, x2 - x1, y2 - y1], dim=-1)
+    # now compute the area of the large box
+    area_large = (x2 - x1) * (y2 - y1)
+    # compute the IoU then the GIoU
+    iou = compute_iou(box1, box2)
+    giou = iou - (area_large - compute_union(box1, box2))
+    return giou
+
+
 class HungarianMatcher(nn.Module):
     """
     Matches predicted queries to GT buttons.
@@ -131,7 +193,6 @@ class SetCriterion(nn.Module):
 
     def loss_buttons(self, outputs, targets, indices):
         src_coords = outputs["pred_boxes"]  # [B, Q, 4]
-        bs, q, _ = src_coords.shape
 
         matched_pred = []
         matched_tgt = []
@@ -148,6 +209,24 @@ class SetCriterion(nn.Module):
             matched_tgt = torch.cat(matched_tgt, dim=0)
             loss_button = F.l1_loss(matched_pred, matched_tgt, reduction="none").sum(-1).mean()
         return {"loss_button": loss_button}
+    
+    def loss_giou(self, outputs, targets, indices):
+        src_coords = outputs["pred_boxes"]  # [B, Q, 4] (cx, cy, w, h)
+        matched_pred = []
+        matched_tgt = []
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if len(src_idx) > 0:
+                matched_pred.append(src_coords[b, src_idx])
+                matched_tgt.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
+        # now that we have the predictions and targets, we compute the GIoU loss
+        giou_loss = 0.0
+        if len(matched_pred) > 0:
+            matched_pred = torch.cat(matched_pred, dim=0)
+            matched_tgt = torch.cat(matched_tgt, dim=0)
+            giou = compute_giou(matched_pred, matched_tgt)
+            giou_loss = (1 - giou).mean()
+        return {"loss_giou": giou_loss}
+
 
     def forward(self, outputs, targets):
         indices = self.matcher(outputs, targets)
