@@ -234,7 +234,7 @@ class SetCriterion(nn.Module):
         losses = {}
         losses.update(self.loss_labels(outputs, targets, indices))
         losses.update(self.loss_buttons(outputs, targets, indices))
-
+        losses.update(self.loss_giou(outputs, targets, indices))
         total_loss = 0.0
         for k, v in losses.items():
             total_loss = total_loss + self.weight_dict[k] * v
