@@ -26,10 +26,10 @@ class BoundingBox:
     @classmethod
     def from_json(cls, json_data: dict) -> "BoundingBox":
         return cls(
-            cx=json_data["cx_ndc"],
-            cy=json_data["cy_ndc"],
-            w=json_data["width_ndc"],
-            h=json_data["height_ndc"]
+            cx=json_data["cx"],
+            cy=json_data["cy"],
+            w=json_data["w"],
+            h=json_data["h"]
         )
     
     def to_x1y1x2y2(self) -> tuple[float, float, float, float]:
