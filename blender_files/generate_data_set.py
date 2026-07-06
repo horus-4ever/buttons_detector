@@ -13,11 +13,10 @@ if BLEND_DIR not in sys.path:
     sys.path.insert(0, BLEND_DIR)
 BLEND_DIR = Path(BLEND_DIR)
 
-from configuration import read_configuration, Parameters, Parameter, SamplingPolicy
-import helpers
-from scene import Scene, Renderer
+from blender_files.configuration import read_configuration, Parameters, Parameter, SamplingPolicy
+from blender_files.scene import Scene, Renderer
 
-CONFIG = read_configuration(BLEND_DIR / "configuration.json")
+CONFIG = read_configuration(BLEND_DIR / "blender_files" / "configuration.json")
 
 permutation_parameters, random_parameters = CONFIG.parameters.get_parameters()
 
@@ -84,5 +83,5 @@ if __name__ == "__main__":
     random.seed(CONFIG.seed)
     # then generate the dataset
     for scene_config in CONFIG.scenes:
-        scene_path = BLEND_DIR / scene_config.name
+        scene_path = BLEND_DIR / "blender_files" / scene_config.name
         generate_dataset(scene_path, scene_config.max_generate, args.resume_from, args.generation_mode)

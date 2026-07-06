@@ -387,8 +387,8 @@ class Scene:
             return None
 
         # get the normalized coordinates
-        cx = 0.5 * (x_min + x_max)
-        cy = 0.5 * (y_min + y_max)
+        cx = (0.5 * (x_min + x_max)) / width
+        cy = (0.5 * (y_min + y_max)) / height
         w = bbox_w / width
         h = bbox_h / height
 
@@ -470,8 +470,9 @@ class Renderer:
                 bpy.ops.render.render(write_still=True)
                 # project points
                 annotation = self.get_current_annotation()
+                annotation.image.url = out_image_path.name
                 with open(out_json_path, "w") as file:
-                    json.dump(annotation, file, indent=2)
+                    json.dump(annotation.to_json(), file, indent=2)
                 # print
                 print(f"==> frame '{i}' rendered in path '{filename}'")
                 # go to next
