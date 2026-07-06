@@ -15,6 +15,14 @@ class BoundingBox:
     w: float
     h: float
 
+    def to_json(self):
+        return {
+            "cx": self.cx,
+            "cy": self.cy,
+            "w": self.w,
+            "h": self.h
+        }
+
     @classmethod
     def from_json(cls, json_data: dict) -> "BoundingBox":
         return cls(
@@ -44,6 +52,12 @@ class Button:
     bbox: BoundingBox
     visible: bool
 
+    def to_json(self):
+        return {
+            "bbox": self.bbox.to_json(),
+            "visible": self.visible
+        }
+
     @classmethod
     def from_json(cls, json_data: dict) -> "Button":
         return cls(
@@ -62,6 +76,13 @@ class Fastener:
     visible: bool
     type: str
 
+    def to_json(self):
+        return {
+            "bbox": self.bbox.to_json(),
+            "visible": self.visible,
+            "type": self.type
+        }
+
     @classmethod
     def from_json(cls, json_data: dict) -> "Fastener":
         return cls(
@@ -78,6 +99,12 @@ class Pair:
     """
     button: Button
     fastener: Fastener
+
+    def to_json(self):
+        return {
+            "button": self.button.to_json(),
+            "fastener": self.fastener.to_json()
+        }
 
     @classmethod
     def from_json(cls, json_data: dict) -> "Pair":
@@ -97,6 +124,13 @@ class Cloth:
     segmentation: str
     pairs: list[Pair]
 
+    def to_json(self):
+        return {
+            "type": self.type,
+            "segmentation": self.segmentation,
+            "pairs": list(pair.to_json() for pair in self.pairs)
+        }
+
     @classmethod
     def from_json(cls, json_data: dict) -> "Cloth":
         return cls(
@@ -115,6 +149,13 @@ class ImageInfo:
     width: int
     height: int
 
+    def to_json(self):
+        return {
+            "url": self.url,
+            "width": self.width,
+            "height": self.height
+        }
+
     @classmethod
     def from_json(cls, json_data: dict) -> "ImageInfo":
         return cls(
@@ -130,13 +171,19 @@ class Annotation:
     Represents an annotation of a clothing item in an image.
     """
     image: ImageInfo
-    clothing_item: Cloth
+    cloth: Cloth
+
+    def to_json(self):
+        return {
+            "image": self.image.to_json(),
+            "cloth": self.cloth.to_json() 
+        }
 
     @classmethod
     def from_json(cls, json_data: dict) -> "Annotation":
         return cls(
             image=ImageInfo.from_json(json_data["image"]),
-            clothing_item=Cloth.from_json(json_data["clothing_item"])
+            cloth=Cloth.from_json(json_data["cloth"])
         )
 
 
@@ -149,6 +196,14 @@ class DataSplit:
     train: float
     val: float
     test: float
+
+    def to_json(self):
+        return {
+            "seed": self.seed,
+            "train": self.train,
+            "val": self.val,
+            "test": self.test
+        }
 
     @classmethod
     def from_json(cls, json_data: dict) -> "DataSplit":
@@ -172,6 +227,14 @@ class Dataset:
     train_indices: list[int] = field(default_factory=list)
     validation_indices: list[int] = field(default_factory=list)
     test_indices: list[int] = field(default_factory=list)
+
+    def to_json(self) -> dict:
+        return {
+            "dataset_root": self.dataset_root,
+            "images_dir": self.images_dir,
+            "annotations_dir": self.annotations_dir,
+            "data_split": self.data_split
+        }
 
     @classmethod
     def from_json(cls, json_data: dict) -> "Dataset":
