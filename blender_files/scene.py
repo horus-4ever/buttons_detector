@@ -432,7 +432,48 @@ class Scene:
             pair = df.Pair(button, velcro)
             pairs.append(pair)
         return pairs
+    
+    def set_segmentation_mode(self):
+        return SegmentationMode(self.scene, self.cloth)
 
+
+class SegmentationMode:
+    def __init__(self, scene, target):
+        self.scene = scene
+        self.target = target
+        self.materials = {}
+        # define black and white materials
+        self._black = bpy.data.materials.new(name="Mask_Black")
+        self._black.use_nodes = True
+        self._black.node_tree.nodes["Principled BSDF"].inputs[0].default_value = (0, 0, 0, 1)
+        self._white = bpy.data.materials.new(name="Mask_White")
+        self._white.use_nodes = True
+        self._white.node_tree.nodes["Principled BSDF"].inputs[0].default_value = (1, 1, 1, 1)
+
+    def _set_textures(self):
+        for obj in bpy.data.objects:
+            if obj.type != "MESH":
+                continue
+            obj.data.materials.clear()
+            if obj == self.target:
+                obj.data.materials.append(self._white)
+            else:
+                obj.data.materials.append(self._black)
+
+    def __enter__(self):
+        for obj in bpy.data.objects:
+            if obj.type != "MESH":
+                continue
+            self.materials[obj.name] = list(obj.data.materials)
+        self._set_textures()
+    
+    def __exit__(self, exc_type, exc, tb):
+        for obj in bpy.data.objects:
+            if obj.type != "MESH":
+                continue
+            obj.data.materials.clear()
+            for mat in self.materials[obj.name]:
+                obj.data.materials.append(mat)
 
 
 def bbox_corners_world(obj) -> list[Vector]:
@@ -479,10 +520,13 @@ class Renderer:
                 # get the filename
                 filename = self.current_output_filename
                 out_image_path = self.output_dir / "images" / f"{filename}.png"
+                out_segmentation_path = self.output_dir / "segmentation" / f"{filename}.png"
                 out_json_path = self.output_dir / "annotations" / f"{filename}.json"
                 # render and write the image
                 scene.render.filepath = str(out_image_path)
                 bpy.ops.render.render(write_still=True)
+                # now we need to render the scene as a binary mask (segmentation) for the cloth
+                # TODO: render the segmentation mask
                 # project points
                 annotation = self.get_current_annotation()
                 annotation.image.url = out_image_path.name
