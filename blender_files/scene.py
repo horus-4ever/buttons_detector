@@ -163,7 +163,7 @@ class Scene:
 
     def set_random_image_texture(self, object, texture_folder) -> None:
         """Set a random image texture from the given folder to the given object."""
-        folder = Path(texture_folder)
+        folder = Path("blender_files") / texture_folder
         image_files = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.jpg', '.jpeg']]
         if image_files:
             image_path = random.choice(image_files)
@@ -261,6 +261,7 @@ class Scene:
         brightness = params.get("brightness").value
         button_scale = params.get("button_scale").value
         vertex_mass = params.get("vertex_mass").value
+        no_distractions = params.get("no_distractions")
         # set the parameters
         self.set_object_texture(self.cloth, cloth_color)
         for button in self.buttons:
@@ -271,7 +272,21 @@ class Scene:
             velcro.reset()
             self.set_object_texture(velcro.velcro, velcro_color)
             velcro.scale = velcro.scale * button_scale
+        # set the background color
+        self.set_object_texture(self.background, background_color)
+        # now check the distractions
+        dont_render = False
+        if random.random() <= no_distractions:
+            dont_render = True
         for distraction in self.distractions:
+            if dont_render:
+                distraction.button.hide_render = True
+                continue
+            distraction.button.hide_render = False
+            # now select with a probability the current distraction to be selected
+            if random.random() > 0.6: # take negation!
+                distraction.button.hide_render = True
+                continue
             distraction.reset()
             self.set_object_texture(distraction.button, button_color)
             distraction.scale = distraction.scale * button_scale

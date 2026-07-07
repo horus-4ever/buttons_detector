@@ -51,7 +51,7 @@ def generate_random_all(parameters: Parameters, generate: int, mode="training"):
         yield {obj.name: obj for obj in random_combination}
 
 
-def generate_dataset(scene_path: Path, max_generate: int, resume_from: int = 0, mode: str = "training"):
+def generate_dataset(scene_path: Path, max_generate: int, no_distractions: float, resume_from: int = 0, mode: str = "training"):
     bpy.ops.wm.open_mainfile(filepath=str(scene_path))
     scene_name = scene_path.stem
     scene = Scene.from_current_bpy_context(scene_name)
@@ -61,6 +61,7 @@ def generate_dataset(scene_path: Path, max_generate: int, resume_from: int = 0, 
         if count < resume_from:
             count += 1
             continue
+        parameters["no_distractions"] = no_distractions
         renderer.render_at(parameters, list(range(3, 55)))
         count += 1
     print(count)
@@ -84,4 +85,4 @@ if __name__ == "__main__":
     # then generate the dataset
     for scene_config in CONFIG.scenes:
         scene_path = BLEND_DIR / "blender_files" / scene_config.name
-        generate_dataset(scene_path, scene_config.max_generate, args.resume_from, args.generation_mode)
+        generate_dataset(scene_path, scene_config.max_generate, scene_config.no_distractions, args.resume_from, args.generation_mode)
