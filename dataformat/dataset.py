@@ -6,10 +6,17 @@ import numpy as np
 from torch.utils.data import Dataset
 from typing import Callable
 from PIL import Image
+from abc import ABC, abstractmethod
+
+
+class Transform(ABC):
+    @abstractmethod
+    def __call__(self, image: Image.Image, annotations: Annotation):
+        return NotImplemented
 
 
 class PairDataset(Dataset):
-    def __init__(self, root: "DatasetConfig", annotations: list[Annotation], transform: Callable | None = None):
+    def __init__(self, root: "DatasetConfig", annotations: list[Annotation], transform: Transform | None = None):
         self.root = root
         self.annotations = annotations
         self.transform = transform
