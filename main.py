@@ -1,5 +1,5 @@
 from train.train import train
-from train.config import ModelConfig
+from model.config import ModelConfig
 from pathlib import Path
 
 if __name__ == "__main__":
