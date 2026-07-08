@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw
 from torchvision import transforms
 from mpl_toolkits.axes_grid1 import ImageGrid
 
-from prtr import build_model_from
+from model.prtr import build_model_from
 
 
 DATASET_ROOT = Path("dataset")
@@ -104,7 +104,9 @@ def get_predictions(image, outputs):
     width, height = image.size
     # put on the CPU, and we have only one batch
     pred_logits = outputs["pred_logits"][0].detach().cpu()      # [Q, C + 1]
-    pred_buttons = outputs["pred_boxes"][0].detach().cpu()    # [Q, 4]
+    pred_boxes = outputs["pred_boxes"][0].detach().cpu()    # [Q, 2, 4]
+    pred_buttons = pred_boxes[:, 0, :] # [Q, 4]
+    pred_fasteners = pred_boxes[:, 1, :] # [Q, 4]
     # transforms to probabilities
     pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
     pred_classes = pred_probs.argmax(dim=-1)

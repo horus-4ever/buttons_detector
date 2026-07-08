@@ -1,9 +1,10 @@
 import torch
 from torch import nn
-from transformer import DeformableTransformer
+from .transformer import DeformableTransformer
 import torch.nn.functional as F
-from position_encoding import PositionEmbeddingSine2D
-from backbone import MultiscaleResNet50
+from .position_encoding import PositionEmbeddingSine2D
+from .backbone import MultiscaleResNet50
+from .config import ModelConfig
 from utils import MLP, inverse_sigmoid
 from pathlib import Path
 import json
@@ -151,10 +152,28 @@ class PRTR(nn.Module):
 
 
 
+def build_model(model_config: ModelConfig):
+    model_params = model_config.model_parameters
+    model = PRTR(
+        name=model_config.name,
+        num_classes=1,
+        num_queries=model_params.num_queries,
+        d_model=model_params.d_model,
+        n_heads=model_params.n_heads,
+        n_encoder_layers=model_params.n_encoder_layers,
+        n_decoder_layers=model_params.n_decoder_layers,
+        n_points=model_params.n_points,
+        nrefpointsperquery=2,
+        dim_ffn=model_params.dim_ffn,
+        dropout=model_params.dropout,
+        activation=model_params.activation,
+        mlp_hidden_dim=model_params.mlp_hidden_dim,
+        mlp_num_layers=model_params.mlp_num_layers
+    )
+    return model
+
+
 def build_model_from(json_path: str):
     path = Path(json_path)
-    with open(path, "r") as file:
-        data = json.load(file)
-        model_name = data["model_name"]
-        parameters = data["parameters"]
-        return PRTR(model_name, **parameters)
+    model_config = ModelConfig.open(path)
+    return build_model(model_config)

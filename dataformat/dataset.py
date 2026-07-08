@@ -89,7 +89,7 @@ class DatasetConfig:
         """
         Checks if the dataset has a split cache.
         """
-        return Path(self.dataset_root / "dataset.cache").exists()
+        return (Path(self.dataset_root) / "dataset.cache").exists()
     
     def _create_split_cache(self):
         """
@@ -158,23 +158,23 @@ class DatasetConfig:
 
     @property
     def train_annotations(self) -> list[Annotation]:
-        if not hasattr(self, "_train_annotations"):
-            raise ValueError("Dataset not loaded. Call `check_dataset()` first.")
+        if not self._has_split_cache():
+            raise ValueError("Dataset not loaded. Call `load()` first.")
         return self._train_annotations
 
     @property
     def validation_annotations(self) -> list[Annotation]:
-        if not hasattr(self, "_validation_annotations"):
-            raise ValueError("Dataset not loaded. Call `check_dataset()` first.")
+        if not self._has_split_cache():
+            raise ValueError("Dataset not loaded. Call `load()` first.")
         return self._validation_annotations
 
     @property
     def test_annotations(self) -> list[Annotation]:
-        if not hasattr(self, "_test_annotations"):
-            raise ValueError("Dataset not loaded. Call `check_dataset()` first.")
+        if not self._has_split_cache():
+            raise ValueError("Dataset not loaded. Call `load()` first.")
         return self._test_annotations
 
-    def check_dataset(self):
+    def load(self):
         """
         Checks if the dataset has a split cache, and creates one if it doesn't exist.
         """
@@ -182,6 +182,8 @@ class DatasetConfig:
             print("No split cache found. Creating one...")
             self._create_split_cache()
             print("Split cache created.")
+        # now load the dataset
+        self._load_dataset()
 
     def to_torch_dataset(self):
         """

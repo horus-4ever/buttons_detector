@@ -10,6 +10,7 @@ class ModelParameters:
     n_heads: int
     n_encoder_layers: int
     n_decoder_layers: int
+    n_points: int
     dim_ffn: int
     dropout: float
     activation: str
@@ -24,6 +25,7 @@ class ModelParameters:
             n_heads=data["n_heads"],
             n_encoder_layers=data["n_encoder_layers"],
             n_decoder_layers=data["n_decoder_layers"],
+            n_points=data["n_points"],
             dim_ffn=data["dim_ffn"],
             dropout=data["dropout"],
             activation=data["activation"],
@@ -69,10 +71,16 @@ class ModelConfig:
     finetune_parameters: TrainingParameters
 
     @classmethod
-    def from_to(cls, data):
+    def from_json(cls, data):
         return cls(
             name=data["name"],
             model_parameters=ModelParameters.from_json(data["model_parameters"]),
             training_parameters=TrainingParameters.from_json(data["training_parameters"]),
             finetune_parameters=TrainingParameters.from_json(data["finetune_parameters"])
         )
+
+    @classmethod
+    def open(cls, path: Path):
+        with open(path, "r") as file:
+            json_data = json.load(file)
+            return cls.from_json(json_data)

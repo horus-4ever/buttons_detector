@@ -200,7 +200,7 @@ class SetCriterion(nn.Module):
 
     def loss_buttons(self, outputs, targets, indices):
         # WARNING: outputs are now of shape [B, Q, RqP, 4]
-        src_coords = outputs["pred_buttons"]  # [B, Q, RqP, 4]
+        src_coords = outputs["pred_boxes"]  # [B, Q, RqP, 4]
         # split into buttons and keypoints
         src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
         src_keypoints_coords = src_coords[:, :, 1, :] # [B, Q, 4]
@@ -235,7 +235,7 @@ class SetCriterion(nn.Module):
     
     def loss_giou(self, outputs, targets, indices):
         # WARNING: outputs are now of shape [B, Q, RqP, 4]
-        src_coords = outputs["pred_buttons"]  # [B, Q, RqP, 4]
+        src_coords = outputs["pred_boxes"]  # [B, Q, RqP, 4]
         # split into buttons and keypoints
         src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
         src_keypoints_coords = src_coords[:, :, 1, :] # [B, Q, 4]

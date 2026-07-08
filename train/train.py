@@ -8,8 +8,11 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader, Subset
 from torchvision import transforms as T
 
-from model.prtr import PRTR
+from model.prtr import PRTR, build_model
 from model.criterion import HungarianMatcher, SetCriterion
+from model.config import ModelConfig
+from dataformat.dataset import DatasetConfig, Annotation
+from train.transforms import TrainingTransform, ValidationTransform
 
 
 def collate_fn(batch):
@@ -20,6 +23,7 @@ def collate_fn(batch):
     # get the maximum image size of the batch
     max_h = max(img.shape[1] for img in images)
     max_w = max(img.shape[2] for img in images)
+    # targets: list of [Annotation]
 
     batch_size = len(images)
     channels = images[0].shape[0]
@@ -31,16 +35,14 @@ def collate_fn(batch):
     padding_mask = torch.ones((batch_size, max_h, max_w), dtype=torch.bool)
 
     new_targets = []
-    for i, (img, tgt) in enumerate(zip(images, targets)):
-        _, h, w = img.shape
-        padded_images[i, :, :h, :w] = img
+    for i, (image, target) in enumerate(zip(images, targets)):
+        _, h, w = image.shape
+        padded_images[i, :, :h, :w] = image
         padding_mask[i, :h, :w] = False
-
-        tgt = dict(tgt)
-        tgt["size"] = torch.tensor([h, w], dtype=torch.int64)
-        new_targets.append(tgt)
-
-    return padded_images, padding_mask, new_targets
+        new_targets.append(target)
+    # take the new common size
+    common_size = (max_w, max_h)
+    return padded_images, padding_mask, new_targets, common_size
 
 
 def seed_worker(worker_id: int):
@@ -65,12 +67,6 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.last_was_best = False
 
-    def _move_targets_to_device(self, targets):
-        return [
-            {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in t.items()}
-            for t in targets
-        ]
-
     def _accumulate_losses(self, running: Dict[str, float], losses: Dict[str, torch.Tensor]):
         for k, v in losses.items():
             running[k] = running.get(k, 0.0) + float(v.item())
@@ -79,6 +75,18 @@ class Trainer:
         if n == 0:
             raise RuntimeError("Dataloader produced zero batches.")
         return {k: v / n for k, v in running.items()}
+    
+    def _annotations_to_tensor(self, annotations: list[Annotation]):
+        targets = []
+        for annotation in annotations:
+            coord_buttons, coord_fasteners = annotation.to_tensor()
+            labels = torch.zeros(coord_buttons.size()[0], dtype=torch.long)
+            targets.append({
+                "labels": labels,
+                "buttons": coord_buttons,
+                "keypoints": coord_fasteners
+            })
+        return targets
 
     def train_one_epoch(self):
         self.model.train()
@@ -87,10 +95,12 @@ class Trainer:
 
         running: Dict[str, float] = {}
 
-        for images, padding_mask, targets in self.dataloader:
+        for images, padding_mask, annotations, (W, H) in self.dataloader:
+            # annotations: b * Annotation
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
-            targets = self._move_targets_to_device(targets)
+            # now transform the targets into tensors
+            targets = self._annotations_to_tensor(annotations)
 
             outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
@@ -110,10 +120,11 @@ class Trainer:
 
         running: Dict[str, float] = {}
 
-        for images, padding_mask, targets in self.val_dataloader:
+        for images, padding_mask, annotations, (W, H) in self.val_dataloader:
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
-            targets = self._move_targets_to_device(targets)
+            # now transform the targets into tensors
+            targets = self._annotations_to_tensor(annotations)
 
             outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
@@ -181,86 +192,48 @@ def format_stats(stats: Dict[str, float]):
     return "(" + ", ".join(parts) + ")"
 
 
-def init_trainer(model_config):
-    dataset_root = model_config["dataset"]
-    training_parameters = model_config["training_parameters"]
-    model_parameters = model_config["parameters"]
-    model_name = model_config["model_name"]
-
-    batch_size = training_parameters["batch_size"]
-    lr = training_parameters["lr"]
-    weight_decay = training_parameters["weight_decay"]
-    train_split = training_parameters["train_split"]
-    num_workers = training_parameters["num_workers"]
-    seed = training_parameters["seed"]
-
-    cost_class = training_parameters["cost_class"]
-    cost_coord = training_parameters["cost_coord"]
-    cost_giou = training_parameters["cost_giou"]
-
-    val_size = training_parameters.get("val_size", 512)
-
+def init_trainer(model_config: ModelConfig):
+    train_params = model_config.training_parameters
+    model_params = model_config.model_parameters
+    # get the device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
+    # set the random seed
+    random.seed(train_params.seed)
+    torch.manual_seed(train_params.seed)
+    # get the dataset
+    dataset_config = DatasetConfig.open(train_params.dataset)
+    dataset_config.load() # builds cache
+    train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
+    train_dataset.transform = TrainingTransform()
+    val_dataset.transform = ValidationTransform(512)
 
-    random.seed(seed)
-    torch.manual_seed(seed)
-
-    # Build a temporary dataset only to know length and annotation order.
-    base_dataset = ButtonDataset(dataset_root, transform=None)
-    n_total = len(base_dataset)
-
-    n_train = int(train_split * n_total)
-    n_val = n_total - n_train
-
-    if n_train <= 0 or n_val <= 0:
-        raise ValueError(
-            f"Invalid split: n_total={n_total}, n_train={n_train}, n_val={n_val}. "
-            f"Check training_parameters['train_split']."
-        )
-
-    split_generator = torch.Generator().manual_seed(seed)
-    indices = torch.randperm(n_total, generator=split_generator).tolist()
-
-    train_indices = indices[:n_train]
-    val_indices = indices[n_train:]
-
-    train_dataset = Subset(
-        ButtonDataset(dataset_root, transform=RandomTrainTransform()),
-        train_indices,
-    )
-
-    val_dataset = Subset(
-        ButtonDataset(dataset_root, transform=make_val_transform(size=val_size)),
-        val_indices,
-    )
-
+    # create the data loaders
     loader_generator = torch.Generator()
-    loader_generator.manual_seed(seed)
-
+    loader_generator.manual_seed(train_params.seed)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,
+        batch_size=train_params.batch_size,
         shuffle=True,
-        num_workers=num_workers,
+        num_workers=train_params.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
         worker_init_fn=seed_worker,
         generator=loader_generator,
     )
-
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,
+        batch_size=train_params.batch_size,
         shuffle=False,
-        num_workers=num_workers,
+        num_workers=train_params.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
         worker_init_fn=seed_worker,
     )
-
-    model = PRTR(model_name, **model_parameters)
+    # build the model
+    model = build_model(model_config)
     model = model.to(device)
+    print(f"# model built and loaded to '{device}'")
 
     total_params = sum(p.numel() for p in model.parameters())
     total_params_backbone = sum(p.numel() for p in model.backbone.parameters())
@@ -271,25 +244,25 @@ def init_trainer(model_config):
     print("# Trainable parameters:", trainable_params)
 
     matcher = HungarianMatcher(
-        cost_class=cost_class,
-        cost_coord=cost_coord,
+        cost_class=train_params.cost_class,
+        cost_coord=train_params.cost_coord,
     )
 
     criterion = SetCriterion(
-        num_classes=model_parameters["num_classes"],
+        num_classes=1,
         matcher=matcher,
         weight_dict={
-            "loss_ce": cost_class,
-            "loss_button": cost_coord,
-            "loss_giou": cost_giou
+            "loss_ce": train_params.cost_class,
+            "loss_button": train_params.cost_coord,
+            "loss_giou": train_params.cost_giou
         },
         eos_coef=0.1,
     ).to(device)
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
-        lr=lr,
-        weight_decay=weight_decay,
+        lr=train_params.lr,
+        weight_decay=train_params.weight_decay,
     )
 
     scheduler = torch.optim.lr_scheduler.StepLR(
@@ -307,11 +280,10 @@ def init_trainer(model_config):
         dataloader=train_loader,
         val_dataloader=val_loader,
     )
-
     return trainer
 
 
-def main(model_config, resume_path=None, save_weights_folder="checkpoints"):
+def train(model_config: ModelConfig, resume_path=None, save_weights_folder="checkpoints"):
     save_dir = Path(save_weights_folder)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -320,42 +292,20 @@ def main(model_config, resume_path=None, save_weights_folder="checkpoints"):
     if resume_path is not None:
         trainer.resume(Path(resume_path))
 
-    num_epochs = model_config["training_parameters"]["num_epochs"]
+    num_epochs = model_config.training_parameters.num_epochs
     start_epoch = trainer.epoch
-
+    # training loop
     for epoch in range(start_epoch, start_epoch + num_epochs):
+        # step one epoch of the trainer
         train_stats, val_stats = trainer.step()
-
+        # display the epoch results
         print(
             f"Epoch [{epoch + 1}/{start_epoch + num_epochs}] | "
             f"train {format_stats(train_stats)} | "
             f"val {format_stats(val_stats)}"
         )
-
+        # save the last model, and the best one
         trainer.save_checkpoint(save_dir / "last.pt")
-
         if trainer.last_was_best:
             trainer.save_checkpoint(save_dir / "best.pt")
             print(f"    New best model saved with val loss: {val_stats['loss']:.4f}")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--model", type=str, default="model.json")
-    parser.add_argument("--save-weights", type=str, default="checkpoints")
-
-    args = parser.parse_args()
-
-    config_path = Path(args.model)
-
-    with open(config_path, "r") as file:
-        model_config = json.load(file)
-
-    main(
-        model_config,
-        resume_path=args.resume,
-        save_weights_folder=args.save_weights,
-    )

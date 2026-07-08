@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch
 from utils import FFN
 from typing import Optional
-from attention import MultiscaleDeformableAttention
+from .attention import MultiscaleDeformableAttention
 
 
 class Encoder(nn.Module):

@@ -1,18 +1,21 @@
-from ultralytics import YOLO
-import cv2
+from train.train import train
+from train.config import ModelConfig
+from pathlib import Path
 
+if __name__ == "__main__":
+    import argparse
+    # init the arguments parser and get the command line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--model", type=str, default="model.json")
+    parser.add_argument("--save-weights", type=str, default="checkpoints")
+    args = parser.parse_args()
+    # get the model configuration
+    config_path = Path(args.model)
+    model_config = ModelConfig.open(config_path)
 
-model = YOLO("./yolo26s-pose.pt")
-
-results = model("https://www.shutterstock.com/image-photo/portrait-asian-business-person-crossed-260nw-2603900035.jpg")  # predict on an image
-
-# Access the results
-for result in results:
-    xy = result.keypoints.xy  # x and y coordinates
-    xyn = result.keypoints.xyn  # normalized
-    kpts = result.keypoints.data  # x, y, visibility (if available)
-
-    frame = result.plot()
-    cv2.imshow("YOLO Pose Visualization", frame)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    train(
+        model_config,
+        resume_path=args.resume,
+        save_weights_folder=args.save_weights,
+    )
