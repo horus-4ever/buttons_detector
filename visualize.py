@@ -13,7 +13,7 @@ from torchvision import transforms
 from mpl_toolkits.axes_grid1 import ImageGrid
 
 from model.prtr import build_model_from
-
+from dataformat.dataformat import BoundingBox
 
 DATASET_ROOT = Path("dataset")
 IMAGES_DIR = DATASET_ROOT / "images"
@@ -34,10 +34,8 @@ BUTTON_CLASS_ID = 0
 @dataclass
 class Prediction:
     class_id: int
-    pos_x: float
-    pos_y: float
-    bbox_w: float
-    bbox_h: float
+    button_bbox: BoundingBox
+    fastener_bbox: BoundingBox
     confidence: float
     query: int
 
@@ -117,9 +115,13 @@ def get_predictions(image, outputs):
     for query_idx in range(num_queries):
         class_id = int(pred_classes[query_idx])
         confidence = float(pred_probs[query_idx, BUTTON_CLASS_ID])
-        xy_norm_tensor = pred_buttons[query_idx]
-        pos_x, pos_y, bbox_w, bbox_h = normalized_to_pixel_xy(xy_norm_tensor, width, height)
-        predictions.append(Prediction(class_id, pos_x, pos_y, bbox_w, bbox_h, confidence, query_idx))
+        b_xy_norm_tensor = pred_buttons[query_idx]
+        f_xy_norm_tensor = pred_fasteners[query_idx]
+        b_pos_x, b_pos_y, b_bbox_w, b_bbox_h = normalized_to_pixel_xy(b_xy_norm_tensor, width, height)
+        f_pos_x, f_pos_y, f_bbox_w, f_bbox_h = normalized_to_pixel_xy(f_xy_norm_tensor, width, height)
+        button_bbox = BoundingBox(b_pos_x, b_pos_y, b_bbox_w, b_bbox_h)
+        fastener_bbox = BoundingBox(f_pos_x, f_pos_y, f_bbox_w, f_bbox_h)
+        predictions.append(Prediction(class_id, button_bbox, fastener_bbox, confidence, query_idx))
     return predictions
 
 
@@ -134,7 +136,7 @@ def get_attention_maps(attn_weights):
     return attn_weights
 
 
-def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_locations, predictions):
+def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_locations, predictions: list[Prediction]):
     """
     - attn_maps: [query_len, heads, num_levels, num_points]
     - spatial_shapes: [num_levels, 2]
@@ -175,11 +177,21 @@ def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_location
             )
         # then draw the predictions
         if prediction.class_id == BUTTON_CLASS_ID:
-            x, y = prediction.pos_x / W_img * 512, prediction.pos_y / H_img * 512
+            button_bbox = prediction.button_bbox
+            fastener_bbox = prediction.fastener_bbox
+            # first draw the button center
+            x, y = button_bbox.cx / W_img * 512, button_bbox.cy / H_img * 512
             radius = 10
             image_draw.ellipse(
                 (x - radius, y - radius, x + radius, y + radius),
                 fill=(0, 255, 0, 255)
+            )
+            # then draw the fastener center
+            x, y = fastener_bbox.cx / W_img * 512, fastener_bbox.cy / H_img * 512
+            radius = 10
+            image_draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                fill=(0, 255, 255, 255)
             )
         attn_map_image = Image.alpha_composite(image, overlay).convert("RGB")
         attn_map_image = attn_map_image
@@ -232,17 +244,27 @@ def visualize_encoder_attention(image: Image.Image, attn_maps, sampling_location
     return fig
 
 
-def visualize_predictions(image: Image.Image, predictions):
+def visualize_predictions(image: Image.Image, predictions: list[Prediction]):
     W, H = image.size
     result_image= image.copy().resize((512, 512)).convert("RGBA")
     blackboard = ImageDraw.Draw(result_image)
     for prediction in predictions:
         if prediction.class_id != BUTTON_CLASS_ID:
             continue
-        x, y, w, h = prediction.pos_x / W * 512, prediction.pos_y / H * 512, prediction.bbox_w / W * 512, prediction.bbox_h / H * 512
+        button_bbox = prediction.button_bbox
+        fastener_bbox = prediction.fastener_bbox
+        # first draw the button bbox
+        x, y, w, h = button_bbox.cx / W * 512, button_bbox.cy / H * 512, button_bbox.w / W * 512, button_bbox.h / H * 512
         blackboard.rectangle(
             (x - w/2, y - h/2, x + w/2, y + h/2),
             outline=(0, 255, 0, 255),
+            width=2
+        )
+        # then draw the fastener bbox
+        x, y, w, h = fastener_bbox.cx / W * 512, fastener_bbox.cy / H * 512, fastener_bbox.w / W * 512, fastener_bbox.h / H * 512
+        blackboard.rectangle(
+            (x - w/2, y - h/2, x + w/2, y + h/2),
+            outline=(0, 255, 255, 255),
             width=2
         )
     return result_image
