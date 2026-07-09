@@ -76,11 +76,13 @@ class Trainer:
             raise RuntimeError("Dataloader produced zero batches.")
         return {k: v / n for k, v in running.items()}
     
-    def _annotations_to_tensor(self, annotations: list[Annotation]):
+    def _annotations_to_tensor(self, annotations: list[Annotation], device):
         targets = []
         for annotation in annotations:
             coord_buttons, coord_fasteners = annotation.to_tensor()
-            labels = torch.zeros(coord_buttons.size()[0], dtype=torch.long)
+            coord_buttons = coord_buttons.to(device=device)
+            coord_fasteners = coord_fasteners.to(device=device)
+            labels = torch.zeros(coord_buttons.size()[0], dtype=torch.long, device=device)
             targets.append({
                 "labels": labels,
                 "buttons": coord_buttons,
@@ -100,7 +102,7 @@ class Trainer:
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
             # now transform the targets into tensors
-            targets = self._annotations_to_tensor(annotations)
+            targets = self._annotations_to_tensor(annotations, device=self.device)
 
             outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
@@ -124,7 +126,7 @@ class Trainer:
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
             # now transform the targets into tensors
-            targets = self._annotations_to_tensor(annotations)
+            targets = self._annotations_to_tensor(annotations, device=self.device)
 
             outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
