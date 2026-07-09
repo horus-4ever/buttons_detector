@@ -1145,3 +1145,274 @@ class SaveImage(Transform):
             text,
             fill=outline,
         )
+
+
+
+class RandomFastenerPartMasking(Transform):
+    """
+    Randomly masks image regions containing at least one fastener.
+
+    Main purpose:
+    - hide a fastener / velcro region while keeping the pair annotation
+      whenever the corresponding button remains visible.
+    - this forces the model to infer the full button-fastener pair from the
+      visible button and surrounding context.
+
+    Annotation rule:
+    - The input Annotation is never modified in place.
+    - If a button is covered by the mask, the whole pair is removed.
+    - If a fastener is covered but its button is not covered, the pair is kept
+      and the fastener bbox is kept unchanged. This is intentional: the target
+      remains supervised even though the visual evidence is occluded.
+    - The `visible` field is not used for decisions.
+    """
+
+    def __init__(
+        self,
+        p: float = 0.3,
+        target_fastener_types: tuple[str, ...] | None = ("velcro",),
+        min_width: float = 0.08,
+        max_width: float = 0.35,
+        min_height: float = 0.08,
+        max_height: float = 0.35,
+        max_masks: int = 1,
+        button_remove_mode: str = "center",  # "center" or "overlap"
+        min_button_overlap: float = 0.75,
+        fill_mode: str = "random_gray",     # "random_gray" or "constant"
+        fill=(0, 0, 0),
+        max_trials: int = 20,
+    ):
+        super().__init__()
+
+        self.p = p
+        self.target_fastener_types = target_fastener_types
+
+        self.min_width = min_width
+        self.max_width = max_width
+        self.min_height = min_height
+        self.max_height = max_height
+
+        self.max_masks = max(1, int(max_masks))
+
+        self.button_remove_mode = button_remove_mode
+        self.min_button_overlap = min_button_overlap
+
+        self.fill_mode = fill_mode
+        self.fill = fill
+
+        self.max_trials = max(1, int(max_trials))
+
+        if self.min_width <= 0.0 or self.max_width <= 0.0:
+            raise ValueError("min_width and max_width must be positive")
+        if self.min_height <= 0.0 or self.max_height <= 0.0:
+            raise ValueError("min_height and max_height must be positive")
+        if self.min_width > self.max_width:
+            raise ValueError("min_width must be <= max_width")
+        if self.min_height > self.max_height:
+            raise ValueError("min_height must be <= max_height")
+        if button_remove_mode not in {"center", "overlap"}:
+            raise ValueError("button_remove_mode must be 'center' or 'overlap'")
+        if fill_mode not in {"random_gray", "constant"}:
+            raise ValueError("fill_mode must be 'random_gray' or 'constant'")
+
+    def _is_target_fastener(self, pair) -> bool:
+        return True
+
+    def _make_fill(self, image: Image.Image):
+        if self.fill_mode == "constant":
+            return _coerce_fill(image, self.fill)
+
+        value = random.randint(0, 160)
+        return _coerce_fill(image, value)
+
+    def _bbox_to_pixel_xyxy(
+        self,
+        bbox,
+        W: int,
+        H: int,
+    ) -> tuple[float, float, float, float]:
+        x1, y1, x2, y2 = _bbox_to_xyxy(bbox)
+        return x1 * W, y1 * H, x2 * W, y2 * H
+
+    def _rect_area(
+        self,
+        rect: tuple[float, float, float, float],
+    ) -> float:
+        x1, y1, x2, y2 = rect
+
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
+
+        return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+    def _intersection_area(
+        self,
+        a: tuple[float, float, float, float],
+        b: tuple[float, float, float, float],
+    ) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+
+        if ax1 > ax2:
+            ax1, ax2 = ax2, ax1
+        if ay1 > ay2:
+            ay1, ay2 = ay2, ay1
+        if bx1 > bx2:
+            bx1, bx2 = bx2, bx1
+        if by1 > by2:
+            by1, by2 = by2, by1
+
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+
+        return max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+
+    def _button_is_made_invisible(
+        self,
+        button_bbox,
+        mask_rect: tuple[float, float, float, float],
+        W: int,
+        H: int,
+    ) -> bool:
+        """
+        Decide whether a masked region makes a button unusable.
+
+        "center" mode matches the earlier RandomButtonErasing behavior:
+        if the button center is inside the erased region, remove the pair.
+
+        "overlap" mode removes the pair only if a sufficiently large fraction
+        of the button bbox is masked.
+        """
+        if self.button_remove_mode == "center":
+            point = (
+                button_bbox.cx * W,
+                button_bbox.cy * H,
+            )
+            return _rect_contains_point(point, mask_rect)
+
+        button_rect = self._bbox_to_pixel_xyxy(button_bbox, W, H)
+        button_area = self._rect_area(button_rect)
+
+        if button_area <= 0.0:
+            return False
+
+        overlap = self._intersection_area(button_rect, mask_rect)
+        overlap_fraction = overlap / button_area
+
+        return overlap_fraction >= self.min_button_overlap
+
+    def _sample_mask_around_fastener(
+        self,
+        fastener_bbox,
+        W: int,
+        H: int,
+    ) -> tuple[int, int, int, int]:
+        """
+        Build a random mask rectangle guaranteed to contain the selected
+        fastener center.
+        """
+        fx = fastener_bbox.cx * W
+        fy = fastener_bbox.cy * H
+
+        mask_w = random.uniform(self.min_width, self.max_width) * W
+        mask_h = random.uniform(self.min_height, self.max_height) * H
+
+        mask_w = max(1, min(int(round(mask_w)), W))
+        mask_h = max(1, min(int(round(mask_h)), H))
+
+        # Randomize the fastener position inside the mask, while ensuring the
+        # mask still contains the fastener center.
+        local_x = random.uniform(0.2, 0.8) * mask_w
+        local_y = random.uniform(0.2, 0.8) * mask_h
+
+        x1 = int(round(fx - local_x))
+        y1 = int(round(fy - local_y))
+
+        x1 = max(0, min(x1, W - mask_w))
+        y1 = max(0, min(y1, H - mask_h))
+
+        x2 = x1 + mask_w
+        y2 = y1 + mask_h
+
+        return x1, y1, x2, y2
+
+    def __call__(
+        self,
+        image: Image.Image,
+        labels: Annotation,
+    ) -> tuple[Image.Image, Annotation]:
+        new_labels = _clone_annotation(labels)
+
+        if random.random() > self.p:
+            return image, new_labels
+
+        candidate_pairs = [
+            pair
+            for pair in new_labels.cloth.pairs
+            if self._is_target_fastener(pair)
+        ]
+
+        if len(candidate_pairs) == 0:
+            return image, new_labels
+
+        W, H = image.size
+        out = image.copy()
+        draw = ImageDraw.Draw(out)
+
+        n_masks = random.randint(1, self.max_masks)
+        mask_rects: list[tuple[int, int, int, int]] = []
+
+        for _ in range(n_masks):
+            selected_pair = random.choice(candidate_pairs)
+
+            for _trial in range(self.max_trials):
+                mask_rect = self._sample_mask_around_fastener(
+                    selected_pair.fastener.bbox,
+                    W,
+                    H,
+                )
+
+                # This is normally guaranteed by construction, but keep the
+                # check explicit because the image boundary clamp can move the
+                # mask.
+                fastener_center = (
+                    selected_pair.fastener.bbox.cx * W,
+                    selected_pair.fastener.bbox.cy * H,
+                )
+
+                if _rect_contains_point(fastener_center, mask_rect):
+                    mask_rects.append(mask_rect)
+                    draw.rectangle(mask_rect, fill=self._make_fill(image))
+                    break
+
+        if len(mask_rects) == 0:
+            return image, new_labels
+
+        kept_pairs = []
+
+        for pair in new_labels.cloth.pairs:
+            button_removed = any(
+                self._button_is_made_invisible(
+                    pair.button.bbox,
+                    mask_rect,
+                    W,
+                    H,
+                )
+                for mask_rect in mask_rects
+            )
+
+            if button_removed:
+                # If the button is made invisible, remove the whole pair.
+                continue
+
+            # If the fastener is masked but the button remains visible, keep
+            # the pair unchanged. This is exactly the occlusion-learning case.
+            kept_pairs.append(pair)
+
+        new_labels.cloth.pairs = kept_pairs
+
+        return out, new_labels

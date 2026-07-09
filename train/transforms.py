@@ -14,6 +14,16 @@ class TrainingTransform(Transform):
         transform = ComposeWithLabels([
             ComposeWrapper(T.Resize((size, size))),
             RandomSafeErasing(p=0.6),
+            RandomFastenerPartMasking(
+                p=0.2,
+                target_fastener_types=("velcro",),
+                min_width=0.10,
+                max_width=0.30,
+                min_height=0.10,
+                max_height=0.35,
+                max_masks=1,
+                button_remove_mode="overlap",
+            ),
             # RandomButtonErasing(p=0.2),
             RandomHorizontalFlip(),
             RandomHorizontalTranslation(p=0.5, min=-0.3, max=0.3),
