@@ -36,6 +36,17 @@ class BoundingBox:
             h=json_data["h"]
         )
     
+    @classmethod
+    def from_x1y1x2y2(cls, x1: float, y1: float, x2: float, y2: float) -> "BoundingBox":
+        """
+        Creates a normalized bounding box from corner coordinates.
+        """
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
+        return cls(cx, cy, width, height)
+    
     def to_x1y1x2y2(self) -> tuple[float, float, float, float]:
         """
         Converts the bounding box from center coordinates to corner coordinates.
