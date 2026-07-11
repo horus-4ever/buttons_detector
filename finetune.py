@@ -6,11 +6,11 @@ from typing import Dict, Any
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset, ConcatDataset
 
-from prtr import PRTR
-from criterion import HungarianMatcher, SetCriterion
+from model.prtr import PRTR
+from model.criterion import HungarianMatcher, SetCriterion
 
 # Assumes your existing script is saved as train.py
-from train import (
+from train.train import (
     ButtonDataset,
     RandomTrainTransform,
     make_val_transform,

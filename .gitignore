@@ -8,6 +8,7 @@ viz_outputs/
 visualize/
 tests/
 model.json
+dataset.json
 combine.py
 out.txt
 *.pth
