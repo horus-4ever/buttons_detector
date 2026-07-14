@@ -57,16 +57,16 @@ class CVATParser:
         )
     
     def _parse_button(self, button: xml.Element) -> tuple[str, df.Button]:
-        cvat_box = button.find("box")
-        pair_id = button.get("pair_id")
+        cvat_box = button
+        pair_id = button.find("attribute").text
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         button_bbox = self._parse_bbox(cvat_box)
         return pair_id, df.Button(button_bbox, visible=True)
     
     def _parse_fastener(self, fastener: xml.Element) -> tuple[str, df.Fastener]:
-        cvat_box = fastener.find("box")
-        pair_id = fastener.get("pair_id")
+        cvat_box = fastener
+        pair_id = fastener.find("attribute").text
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         bbox = self._parse_bbox(cvat_box)
@@ -75,14 +75,17 @@ class CVATParser:
     def _parse_pairs(self, image: xml.Element) -> list[df.Pair]:
         buttons = {}
         fasteners = {}
-        for button in image.findall("button"):
+        boxes = image.findall("box")
+        buttons_boxes = list(filter(lambda box: box.get("label") == "button", boxes))
+        fasteners_boxes = list(filter(lambda box: box.get("label") == "fastener", boxes))
+        for button in buttons_boxes:
             pair_id, button = self._parse_button(button)
             buttons[pair_id] = button
-        for fastener in image.findall("fastener"):
+        for fastener in fasteners_boxes:
             pair_id, fastener = self._parse_fastener(fastener)
             fasteners[pair_id] = fastener
         # since we build pairs, there should be an equal number of each
-        assert len(buttons) == len(fasteners), "There should be an equal number of buttons and fasteners."
+        assert len(buttons) == len(fasteners), f"There should be an equal number of buttons and fasteners.\n{buttons}\n{fasteners}"
         # now build each pair, the order doesn't matter
         pairs = []
         for pair_id in buttons:
@@ -101,15 +104,23 @@ class CVATParser:
 
     def _parse_one_image(self, image: xml.Element) -> df.Annotation:
         image_info = self._get_image_info(image)
+        self._current_width = image_info.width
+        self._current_height = image_info.height
         cloth = self._parse_cloth(image)
         return df.Annotation(image_info, cloth)
+        
     
-    def parse(self) -> list[df.Annotation]:
+    def parse(self) -> tuple[bool, list[df.Annotation]]:
         annotations = []
-        for image in self.xml.findall("image"):
-            annotation = self._parse_one_image(image)
-            annotations.append(annotation)
-        return annotations
+        has_error = False
+        for i, image in enumerate(self.xml.findall("image")):
+            try:
+                annotation = self._parse_one_image(image)
+                annotations.append(annotation)
+            except Exception:
+                print(f"Error in image: {i}")
+                has_error = True
+        return has_error, annotations
 
 
 def convert_cvat_xml_to_dataset(cvat_xml_path, output_dir, image_dir):
@@ -121,10 +132,13 @@ def convert_cvat_xml_to_dataset(cvat_xml_path, output_dir, image_dir):
     (output_dir / "annotations").mkdir(parents=True, exist_ok=True)
     # parse the tree
     parser = CVATParser.open(cvat_xml_path)
-    annotations = parser.parse()
+    error, annotations = parser.parse()
+    if error:
+        print(f"Errors detected. Abort.")
+        return
     print(f"Parsed {len(annotations)}.")
     for i, annotation in enumerate(annotations):
-        print(f"[{i / len(annotations):2f>3}%] copying files...\r")
+        print(f"[{i / len(annotations):2f}%] copying files...", end="\r")
         image_name = annotation.image.url
         image_path = image_dir / image_name
         output_image_path = output_dir / "images" / image_name
