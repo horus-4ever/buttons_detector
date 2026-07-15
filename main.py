@@ -7,6 +7,7 @@ if __name__ == "__main__":
     # init the arguments parser and get the command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--finetune", type=bool, default=False)
     parser.add_argument("--model", type=str, default="model.json")
     parser.add_argument("--save-weights", type=str, default="checkpoints")
     args = parser.parse_args()
@@ -18,4 +19,5 @@ if __name__ == "__main__":
         model_config,
         resume_path=args.resume,
         save_weights_folder=args.save_weights,
+        finetune=args.finetune
     )

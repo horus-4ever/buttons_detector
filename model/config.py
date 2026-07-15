@@ -64,11 +64,22 @@ class TrainingParameters:
 
 
 @dataclass
+class FinetuneParameters(TrainingParameters):
+    weights: Path
+
+    @classmethod
+    def from_json(cls, data):
+        object = TrainingParameters.from_json(data)
+        object.weights = Path(data["weights"])
+        return object
+
+
+@dataclass
 class ModelConfig:
     name: str
     model_parameters: ModelParameters
     training_parameters: TrainingParameters
-    finetune_parameters: TrainingParameters
+    finetune_parameters: FinetuneParameters
 
     @classmethod
     def from_json(cls, data):
@@ -76,7 +87,7 @@ class ModelConfig:
             name=data["name"],
             model_parameters=ModelParameters.from_json(data["model_parameters"]),
             training_parameters=TrainingParameters.from_json(data["training_parameters"]),
-            finetune_parameters=TrainingParameters.from_json(data["finetune_parameters"])
+            finetune_parameters=FinetuneParameters.from_json(data["finetune_parameters"])
         )
 
     @classmethod

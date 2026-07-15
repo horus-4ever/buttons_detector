@@ -5,6 +5,7 @@ from dataformat.dataformat import Annotation
 import random
 
 
+
 class TrainingTransform(Transform):
     def __init__(self, sizes=(512,)):
         self.sizes = sizes

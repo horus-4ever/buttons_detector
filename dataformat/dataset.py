@@ -12,11 +12,16 @@ from abc import ABC, abstractmethod
 class Transform(ABC):
     @abstractmethod
     def __call__(self, image: Image.Image, annotations: Annotation):
-        return NotImplemented
+        raise NotImplemented
+
+
+class EmptyTransform(Transform):
+    def __call__(self, image: Image.Image, annotations: Annotation):
+        return image, annotations
 
 
 class PairDataset(Dataset):
-    def __init__(self, root: "DatasetConfig", annotations: list[Annotation], transform: Transform | None = None):
+    def __init__(self, root: "DatasetConfig", annotations: list[Annotation], transform: Transform):
         self.root = root
         self.annotations = annotations
         self.transform = transform
@@ -189,7 +194,7 @@ class DatasetConfig:
         """
         Returns the training, validation and test dataset as torch `Dataset` objects.
         """
-        train_dataset = PairDataset(self, self.train_annotations)
-        val_dataset = PairDataset(self, self.validation_annotations)
-        test_dataset = PairDataset(self, self.test_annotations)
+        train_dataset = PairDataset(self, self.train_annotations, transform=EmptyTransform())
+        val_dataset = PairDataset(self, self.validation_annotations, transform=EmptyTransform())
+        test_dataset = PairDataset(self, self.test_annotations, transform=EmptyTransform())
         return train_dataset, val_dataset, test_dataset

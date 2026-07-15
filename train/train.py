@@ -194,17 +194,29 @@ def format_stats(stats: Dict[str, float]):
     return "(" + ", ".join(parts) + ")"
 
 
-def init_trainer(model_config: ModelConfig):
-    train_params = model_config.training_parameters
+def load_weights(model, weights: Path, device):
+    if not weights.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {weights}")
+    checkpoint = torch.load(weights, map_location=device)
+    model.load_state_dict(checkpoint)
+
+
+def freeze_backbone(model):
+    for p in model.backbone.body.parameters():
+        p.requires_grad = False
+    model.backbone.eval()
+
+def init_trainer(model_config: ModelConfig, finetune: bool):
+    parameters = model_config.training_parameters if not finetune else model_config.finetune_parameters
     model_params = model_config.model_parameters
     # get the device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
     # set the random seed
-    random.seed(train_params.seed)
-    torch.manual_seed(train_params.seed)
+    random.seed(parameters.seed)
+    torch.manual_seed(parameters.seed)
     # get the dataset
-    dataset_config = DatasetConfig.open(train_params.dataset)
+    dataset_config = DatasetConfig.open(parameters.dataset)
     dataset_config.load() # builds cache
     train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
     train_dataset.transform = TrainingTransform()
@@ -212,12 +224,12 @@ def init_trainer(model_config: ModelConfig):
 
     # create the data loaders
     loader_generator = torch.Generator()
-    loader_generator.manual_seed(train_params.seed)
+    loader_generator.manual_seed(parameters.seed)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=train_params.batch_size,
+        batch_size=parameters.batch_size,
         shuffle=True,
-        num_workers=train_params.num_workers,
+        num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
         worker_init_fn=seed_worker,
@@ -225,9 +237,9 @@ def init_trainer(model_config: ModelConfig):
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=train_params.batch_size,
+        batch_size=parameters.batch_size,
         shuffle=False,
-        num_workers=train_params.num_workers,
+        num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
         worker_init_fn=seed_worker,
@@ -236,6 +248,10 @@ def init_trainer(model_config: ModelConfig):
     model = build_model(model_config)
     model = model.to(device)
     print(f"# model built and loaded to '{device}'")
+    # if finetuning, then load the weights
+    if finetune:
+        load_weights(model, parameters.weights, device)
+        freeze_backbone(model)
 
     total_params = sum(p.numel() for p in model.parameters())
     total_params_backbone = sum(p.numel() for p in model.backbone.parameters())
@@ -246,25 +262,25 @@ def init_trainer(model_config: ModelConfig):
     print("# Trainable parameters:", trainable_params)
 
     matcher = HungarianMatcher(
-        cost_class=train_params.cost_class,
-        cost_coord=train_params.cost_coord,
+        cost_class=parameters.cost_class,
+        cost_coord=parameters.cost_coord,
     )
 
     criterion = SetCriterion(
         num_classes=1,
         matcher=matcher,
         weight_dict={
-            "loss_ce": train_params.cost_class,
-            "loss_button": train_params.cost_coord,
-            "loss_giou": train_params.cost_giou
+            "loss_ce": parameters.cost_class,
+            "loss_button": parameters.cost_coord,
+            "loss_giou": parameters.cost_giou
         },
         eos_coef=0.1,
     ).to(device)
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
-        lr=train_params.lr,
-        weight_decay=train_params.weight_decay,
+        lr=parameters.lr,
+        weight_decay=parameters.weight_decay,
     )
 
     scheduler = torch.optim.lr_scheduler.StepLR(
@@ -285,11 +301,11 @@ def init_trainer(model_config: ModelConfig):
     return trainer
 
 
-def train(model_config: ModelConfig, resume_path=None, save_weights_folder="checkpoints"):
+def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weights_folder="checkpoints"):
     save_dir = Path(save_weights_folder)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    trainer = init_trainer(model_config)
+    trainer = init_trainer(model_config, finetune=finetune)
 
     if resume_path is not None:
         trainer.resume(Path(resume_path))
