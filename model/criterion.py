@@ -57,10 +57,6 @@ def compute_giou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     y1 = torch.min(box1[..., 1] - box1[..., 3] / 2, box2[..., 1] - box2[..., 3] / 2)
     x2 = torch.max(box1[..., 0] + box1[..., 2] / 2, box2[..., 0] + box2[..., 2] / 2)
     y2 = torch.max(box1[..., 1] + box1[..., 3] / 2, box2[..., 1] + box2[..., 3] / 2)
-    # convert to a box
-    large_box = torch.stack([x1, y1, x2 - x1, y2 - y1], dim=-1)
-    # now compute the area of the large box
-    area_large = (x2 - x1) * (y2 - y1)
     # compute the IoU then the GIoU
     iou = compute_iou(box1, box2)
     union = compute_union(box1, box2)
