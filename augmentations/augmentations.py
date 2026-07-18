@@ -20,9 +20,13 @@ from dataformat.dataformat import Annotation
 try:
     _BILINEAR = Image.Resampling.BILINEAR
     _FLIP_LEFT_RIGHT = Image.Transpose.FLIP_LEFT_RIGHT
+    _ROTATE_90 = Image.Transpose.ROTATE_90
+    _ROTATE_270 = Image.Transpose.ROTATE_270
 except AttributeError:
     _BILINEAR = Image.BILINEAR
     _FLIP_LEFT_RIGHT = Image.FLIP_LEFT_RIGHT
+    _ROTATE_90 = Image.ROTATE_90
+    _ROTATE_270 = Image.ROTATE_270
 
 
 # ---------------------------------------------------------------------------
@@ -1416,3 +1420,72 @@ class RandomFastenerPartMasking(Transform):
         new_labels.cloth.pairs = kept_pairs
 
         return out, new_labels
+    
+
+class RandomQuarterTurn(Transform):
+    """
+    Randomly rotate the image by either +90° or -90°.
+
+    Pillow's ROTATE_90 corresponds to a 90° counter-clockwise rotation.
+    ROTATE_270 corresponds to a 90° clockwise rotation.
+
+    The output dimensions are swapped:
+        (W, H) -> (H, W)
+
+    Bounding boxes remain normalized in cx, cy, w, h format.
+    """
+
+    def __init__(self, p: float = 0.5):
+        super().__init__()
+        self.p = p
+
+    def __call__(
+        self,
+        image: Image.Image,
+        labels: Annotation,
+    ) -> tuple[Image.Image, Annotation]:
+        if random.random() >= self.p:
+            return image, _clone_annotation(labels)
+
+        rotate_counter_clockwise = random.choice((True, False))
+
+        if rotate_counter_clockwise:
+            rotated = image.transpose(_ROTATE_90)
+
+            def transform_bbox(bbox):
+                """
+                For a +90° counter-clockwise rotation:
+
+                    x' = y
+                    y' = 1 - x
+                """
+                x1, y1, x2, y2 = _bbox_to_xyxy(bbox)
+
+                return (
+                    y1,
+                    1.0 - x2,
+                    y2,
+                    1.0 - x1,
+                )
+
+        else:
+            rotated = image.transpose(_ROTATE_270)
+
+            def transform_bbox(bbox):
+                """
+                For a -90° clockwise rotation:
+
+                    x' = 1 - y
+                    y' = x
+                """
+                x1, y1, x2, y2 = _bbox_to_xyxy(bbox)
+
+                return (
+                    1.0 - y2,
+                    x1,
+                    1.0 - y1,
+                    x2,
+                )
+
+        new_labels = _transform_annotation_boxes(labels, transform_bbox)
+        return rotated, new_labels

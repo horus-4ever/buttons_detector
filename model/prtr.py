@@ -131,17 +131,17 @@ class PRTR(nn.Module):
         pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
         # for the buttons we of course need to keep by RpQ
         # [B, query_len, RpQ, 4]
-        button_deltas = self.button_head(hs) # [B, num_queries, 4]
+        button_deltas = self.button_head(hs) # [B, Q, RpQ, 4]
         # take the button centers, which are the first two coordinates
-        button_centers = button_deltas[..., :2] # [B, num_queries, 2]
-        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, num_queries, 2]
+        button_centers = button_deltas[..., :2] # [B, Q, RpQ, 2]
+        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, Q, RpQ, 2]
         # now the width and height is given by the last two coordinates
-        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, num_queries, 2]
-        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, num_queries, 4]
+        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
+        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, Q, RpQ, 4]
 
         return {
             "pred_logits": pred_logits,
-            "pred_boxes": pred_boxes,
+            "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
             "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
             "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
             "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
