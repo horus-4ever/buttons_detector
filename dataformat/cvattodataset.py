@@ -118,7 +118,7 @@ class CVATParser:
                 annotation = self._parse_one_image(image)
                 annotations.append(annotation)
             except Exception:
-                print(f"Error in image: {i}")
+                print(f"Error in image: {i} ({image.get('name')})")
                 has_error = True
         return has_error, annotations
 
@@ -138,7 +138,7 @@ def convert_cvat_xml_to_dataset(cvat_xml_path, output_dir, image_dir):
         return
     print(f"Parsed {len(annotations)}.")
     for i, annotation in enumerate(annotations):
-        print(f"[{i / len(annotations):2f}%] copying files...", end="\r")
+        print(f"[{i / len(annotations) * 100:2f}%] copying files...", end="\r")
         image_name = annotation.image.url
         image_path = image_dir / image_name
         output_image_path = output_dir / "images" / image_name
