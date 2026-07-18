@@ -101,6 +101,8 @@ class PRTR(nn.Module):
         # inputs: [B, 3, H_img, W_img]
         B, _, H, W = inputs.shape
 
+        masks = masks.to(device=inputs.device)
+
         # feature_maps: l * [B, embed_dim, Hl, Wl]
         feature_maps = self.backbone(inputs)
         # masks: l * [B, 1, Hl, Wl]
