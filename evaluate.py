@@ -30,8 +30,8 @@ class Prediction:
 
     @classmethod
     def from_outputs(cls, outputs: dict, annotations: Annotation) -> "PredictionList":
-        pred_boxes = outputs["pred_boxes"] # [B, Q, RpQ, 4]
-        probs = outputs["pred_logits"].softmax(-1) # [B, Q, num_classes+1]
+        pred_boxes = outputs["pred_boxes"].detach() # [B, Q, RpQ, 4]
+        probs = outputs["pred_logits"].softmax(-1).detach() # [B, Q, num_classes+1]
         predicted_classes = probs.argmax(dim=-1)  # [B, Q]
         B, *_ = pred_boxes.size()
         # get the boxes with the right classes only
@@ -229,8 +229,8 @@ if __name__ == "__main__":
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # now evaluate a dataset based on the dataset cache it has
     evaluator = Evaluator(model, dataset, threshold, device)
-    result = evaluator.evaluate(threshold=50)
+    result = evaluator.evaluate(threshold=0.5)
 
     import matplotlib.pyplot as plt
-    plt.plot(result["precision"], result["recall"])
+    plt.plot(result["recall"], result["precision"])
     plt.show()
