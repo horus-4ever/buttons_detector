@@ -296,6 +296,7 @@ def visualize_one(
     encoder_sampling_locations = outputs["encoder_sampling_locations"]
     fig = visualize_decoder_attention(image, decoder_attn_maps, decoder_sampling_locations, predictions)
     fig.savefig(output_dir / f"{image_name}_attn.png", dpi=300)
+    plt.close()
     # same for the encoder maps
     # fig = visualize_encoder_attention(image, encoder_attn_maps, encoder_sampling_locations)
     # fig.savefig(Path(f"visualize/{image_name}_encoder_attn.png"), dpi=300)

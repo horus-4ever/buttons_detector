@@ -198,7 +198,7 @@ def load_weights(model, weights: Path, device):
     if not weights.exists():
         raise FileNotFoundError(f"Checkpoint not found: {weights}")
     checkpoint = torch.load(weights, map_location=device)
-    model.load_state_dict(checkpoint)
+    model.load_state_dict(checkpoint["model_state_dict"])
 
 
 def freeze_backbone(model):

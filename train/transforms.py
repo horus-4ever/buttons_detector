@@ -27,6 +27,7 @@ class TrainingTransform(Transform):
             ),
             # RandomButtonErasing(p=0.2),
             RandomHorizontalFlip(),
+            RandomQuarterTurn(),
             RandomHorizontalTranslation(p=0.5, min=-0.3, max=0.3),
             RandomVerticalTranslation(p=0.5, min=-0.3, max=0.3),
             # RandomRotation(p=0.5, min_angle=-45, max_angle=45),
