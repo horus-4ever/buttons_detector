@@ -1,7 +1,7 @@
 from torch import nn, Tensor
 import torch.nn.functional as F
 import torch
-from utils import FFN
+from model.utils import FFN
 from typing import Optional
 from .attention import MultiscaleDeformableAttention
 

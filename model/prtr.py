@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from .position_encoding import PositionEmbeddingSine2D
 from .backbone import MultiscaleResNet50
 from .config import ModelConfig
-from utils import MLP, inverse_sigmoid
+from model.utils import MLP, inverse_sigmoid
 from pathlib import Path
 import json
 
@@ -138,7 +138,7 @@ class PRTR(nn.Module):
         pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, Q, RpQ, 4]
 
         return {
-            "pred_logits": pred_logits,
+            "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
             "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
             "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
             "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
@@ -173,7 +173,7 @@ def build_model(model_config: ModelConfig):
     return model
 
 
-def build_model_from(json_path: str):
+def build_model_from(json_path: str | Path):
     path = Path(json_path)
     model_config = ModelConfig.open(path)
     return build_model(model_config)

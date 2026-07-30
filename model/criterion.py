@@ -3,68 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any, List, Dict, Mapping
 from scipy.optimize import linear_sum_assignment
-
-
-def compute_intersect(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
-    """
-    Computes the intersection area between two boxes.
-    - box1: [B, 4] (cx, cy, w, h)
-    - box2: [B, 4] (cx, cy, w, h)
-    """
-    # computes the intersection area between two boxes
-    x1 = torch.max(box1[..., 0] - box1[..., 2] / 2, box2[..., 0] - box2[..., 2] / 2)
-    y1 = torch.max(box1[..., 1] - box1[..., 3] / 2, box2[..., 1] - box2[..., 3] / 2)
-    x2 = torch.min(box1[..., 0] + box1[..., 2] / 2, box2[..., 0] + box2[..., 2] / 2)
-    y2 = torch.min(box1[..., 1] + box1[..., 3] / 2, box2[..., 1] + box2[..., 3] / 2)
-    inter_area = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
-    return inter_area
-
-def compute_union(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
-    """
-    Computes the union area between two boxes.
-    - box1: [B, 4] (cx, cy, w, h)
-    - box2: [B, 4] (cx, cy, w, h)
-    """
-    # computes the union area between two boxes
-    area1 = box1[..., 2] * box1[..., 3]
-    area2 = box2[..., 2] * box2[..., 3]
-    inter_area = compute_intersect(box1, box2)
-    union_area = area1 + area2 - inter_area
-    return union_area
-
-
-def compute_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
-    """
-    Computes the Intersection over Union between two boxes.
-    - box1: [B, 4] (cx, cy, w, h)
-    - box2: [B, 4] (cx, cy, w, h)
-    """
-    intersection = compute_intersect(box1, box2)
-    union = compute_union(box1, box2)
-    iou = intersection / (union + 1e-6) # add a small epsilon to avoid zero divisions
-    return iou
-
-
-def compute_giou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
-    """
-    Compute the Generalized Intersection over Union between two boxes.
-    - box1: [B, 4] (cx, cy, w, h)
-    - box2: [B, 4] (cx, cy, w, h)
-    """
-    # first we need to compute the large box that contains both boxes
-    # we can do that by taking the min and max of the corners of the boxes
-    x1 = torch.min(box1[..., 0] - box1[..., 2] / 2, box2[..., 0] - box2[..., 2] / 2)
-    y1 = torch.min(box1[..., 1] - box1[..., 3] / 2, box2[..., 1] - box2[..., 3] / 2)
-    x2 = torch.max(box1[..., 0] + box1[..., 2] / 2, box2[..., 0] + box2[..., 2] / 2)
-    y2 = torch.max(box1[..., 1] + box1[..., 3] / 2, box2[..., 1] + box2[..., 3] / 2)
-    # compute the IoU then the GIoU
-    iou = compute_iou(box1, box2)
-    union = compute_union(box1, box2)
-    enclosing_width = torch.clamp(x2 - x1, min=0)
-    enclosing_height = torch.clamp(y2 - y1, min=0)
-    enclosing_area = enclosing_width * enclosing_height
-    giou = iou - (enclosing_area - union) / (enclosing_area + 1e-6)
-    return giou
+from .utils import compute_giou
 
 
 class HungarianMatcher(nn.Module):
@@ -136,8 +75,10 @@ class HungarianMatcher(nn.Module):
             # out_coord[b]: [Q, 4], tgt_coords: [num_gt, 4]
             cost_coord = torch.cdist(out_coord[b], tgt_coords, p=1)
             cost_hole = torch.cdist(pred_holes[b], tgt_holes, p=1)
+            # TODO: add a giou cost
+            cost_giou = -compute_giou(out_coord[b], pred_holes[b])
             # Total cost
-            C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole)
+            C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole) + cost_giou
             C = C.cpu()
 
             pred_ind, tgt_ind = linear_sum_assignment(C)
