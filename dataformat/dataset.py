@@ -189,6 +189,7 @@ class DatasetConfig:
             print("Split cache created.")
         # now load the dataset
         self._load_dataset()
+        return self
 
     def to_torch_dataset(self):
         """
