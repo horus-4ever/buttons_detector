@@ -120,29 +120,34 @@ class MetricCollection:
 
 
 class Evaluator:
-    def __init__(self, model, dataset: DatasetConfig, threshold: float):
+    def __init__(self, model, dataset: DatasetConfig, threshold: float, device):
         self.model = model
         self.dataset = dataset
         self.threshold = threshold
+        self.device = device
 
     def run_one(self, annotation: Annotation):
         image_root = self.dataset.images_dir
         image = Image.open(image_root / annotation.image.url)
         transform = ValidationTransform(512)
         image, annotation = transform(image, annotation)
-        image, masks, annotation, _ = collate_fn([(image, annotation)]) # type: ignore
+        images, masks, annotation, _ = collate_fn([(image, annotation)]) # type: ignore
+        images = images.to(self.device, non_blocking=True)
+        masks = masks.to(self.device, non_blocking=True)
         # now the inference
         self.model.eval()
-        outputs = self.model(image, masks)
+        outputs = self.model(images, masks)
         return outputs
 
     def evaluate(self, threshold: float):
         val_dataset = dataset.validation_annotations
         predictions = PredictionList()
-        for annotation in val_dataset:
+        for i, annotation in enumerate(val_dataset):
+            print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
             prediction = Prediction.from_outputs(outputs, annotations=annotation)
             predictions.merge(prediction)
+        print("Inference finished.")
         total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
         # sort by confidence
         predictions: PredictionList = predictions.sort_by_confidence()
@@ -223,7 +228,7 @@ if __name__ == "__main__":
     # get the dataset
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # now evaluate a dataset based on the dataset cache it has
-    evaluator = Evaluator(model, dataset, threshold)
+    evaluator = Evaluator(model, dataset, threshold, device)
     result = evaluator.evaluate(threshold=50)
 
     import matplotlib.pyplot as plt
