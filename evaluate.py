@@ -1,7 +1,8 @@
 import argparse
 import json
 import math
-from dataclasses import dataclass
+import numpy as np
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -11,321 +12,225 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from torchvision import transforms
 from mpl_toolkits.axes_grid1 import ImageGrid
+from dataformat.dataformat import *
+from dataformat.dataset import DatasetConfig
+from train.transforms import ValidationTransform
+from train.commons import collate_fn
 
-from prtr import build_model_from
-from criterion import HungarianMatcher, SetCriterion
+from model.prtr import build_model_from
+from model.utils import load_weights, compute_iou, compute_pair_iou
 
 
-DATASET_ROOT = Path("dataset")
-IMAGES_DIR = DATASET_ROOT / "images"
+class Prediction:
+    def __init__(self, button_box, fastener_box, confidence, annotations: Annotation):
+        self.button_box = button_box
+        self.fastener_box = fastener_box
+        self.confidence = confidence
+        self.annotations = annotations
 
-CHECKPOINT_DIR = Path("good_runs")
-OUTPUT_DIR = Path("viz_outputs")
+    @classmethod
+    def from_outputs(cls, outputs: dict, annotations: Annotation) -> "PredictionList":
+        pred_boxes = outputs["pred_boxes"] # [B, Q, RpQ, 4]
+        probs = outputs["pred_logits"].softmax(-1) # [B, Q, num_classes+1]
+        predicted_classes = probs.argmax(dim=-1)  # [B, Q]
+        B, *_ = pred_boxes.size()
+        # get the boxes with the right classes only
+        scores = probs[..., 0] # [B, Q]
+        object_boxes_indices = (predicted_classes == 0) # [B, Q]
+        no_object_indices = (predicted_classes == 1)
+        confidence = scores
+        object_boxes = pred_boxes[object_boxes_indices] # [Q, RpQ, 4]
+        # for each prediction of the batch
+        Q, *_ = object_boxes.size()
+        predictions = PredictionList()
+        for b in range(B):
+            for q in range(Q):
+                button_box, fastener_box = object_boxes[q]
+                prediction = cls(
+                    button_box=button_box,
+                    fastener_box=fastener_box,
+                    confidence=confidence[b][q],
+                    annotations=annotations
+                )
+                predictions.add(prediction)
+        return predictions
 
-DEVICE = torch.device("cpu" if torch.cuda.is_available() else "cpu")
 
-INFERENCE_SIZE = 512
+class PredictionList:
+    def __init__(self, predictions: list[Prediction] | None = None):
+        self.predictions = predictions or []
 
-# DETR-style class layout:
-#   class 0 = button
-#   final class = no-object
-BUTTON_CLASS_ID = 0
+    def add(self, *predictions):
+        self.predictions.extend(predictions)
+
+    def merge(self, predictions: "PredictionList"):
+        self.predictions.extend(predictions.predictions)
+
+    def sort_by_confidence(self):
+        """
+        Sort by confidence. A new list is returned (no in-place sort).
+        """
+        return PredictionList(sorted(self.predictions, key = lambda p: p.confidence))
+
+    def __len__(self):
+        return len(self.predictions)
+
+    def __getitem__(self, key):
+        return self.predictions[key]
 
 
 @dataclass
-class Prediction:
-    class_id: int
-    pos_x: float
-    pos_y: float
-    confidence: float
+class Metric:
+    TP: int
+    TN: int
+    FP: int
+    FN: int
+
+    @property
+    def precision(self) -> float:
+        return float(self.TP) / (self.TP + self.FP)
+
+    @property
+    def recall(self) -> float:
+        return float(self.TP) / (self.TP + self.FN)
+
+    @property
+    def F1(self) -> float:
+        return 2 * (self.precision * self.recall) / (self.precision + self.recall)
 
 
-def load_model(model_config_path: str | Path, model_weights_path: str | Path, device: torch.device):
-    model = build_model_from(str(model_config_path))
-    checkpoint = torch.load(model_weights_path, map_location=device)
-    if "model_state_dict" not in checkpoint:
-        raise KeyError(
-            f"Checkpoint does not contain 'model_state_dict'. "
-            f"Available keys: {list(checkpoint.keys())}"
-        )
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.to(device)
-    model.eval()
-    return model
+@dataclass
+class MetricCollection:
+    data: list[Metric] = field(default_factory=list)
+
+    def add(self, *args):
+        self.data.extend(*args)
+
+    @property
+    def average_precision(self) -> float:
+        return sum(m.precision for m in self.data) / len(self.data)
+
+    @property
+    def average_recall(self) -> float:
+        return sum(m.recall for m in self.data) / len(self.data)
+
+    @property
+    def average_F1(self) -> float:
+        return sum(m.F1 for m in self.data) / len(self.data)
 
 
-def load_image(annotation_path: Path, path: Path):
-    # first, get the image
-    image_path = path
-    image = Image.open(image_path).convert("RGB")
-    width, height = image.size
-    # then, get the annotations
-    coordinates = []
-    with open(annotation_path, "r") as file:
-        json_data = json.load(file)
-        buttons = json_data["buttons"]
-        for b in buttons:
-            center = b # ["center"]
-            x = float(center["x_px"]) / float(width)
-            y = 1.0 - float(center["y_px"]) / float(height)
-            coordinates.append([x, y])
-    # convert to torch tensors
-    coordinates = torch.tensor(coordinates) # [nb_gt, 2]
-    labels = torch.zeros(coordinates.size()[0], dtype=torch.long) # [nb_gt]
-    # now simply but that into a list and inside a dict
-    target = {
-        "buttons": coordinates,
-        "labels": labels
-    }
-    return image, target
+class Evaluator:
+    def __init__(self, model, dataset: DatasetConfig, threshold: float, device):
+        self.model = model
+        self.dataset = dataset
+        self.threshold = threshold
+        self.device = device
 
+    def run_one(self, annotation: Annotation):
+        image_root = self.dataset.images_dir
+        image = Image.open(image_root / annotation.image.url)
+        transform = ValidationTransform(512)
+        image, annotation = transform(image, annotation)
+        images, masks, annotation, _ = collate_fn([(image, annotation)]) # type: ignore
+        images = images.to(self.device, non_blocking=True)
+        masks = masks.to(self.device, non_blocking=True)
+        # now the inference
+        self.model.eval()
+        outputs = self.model(images, masks)
+        return outputs
 
-def iter_image_files(directory: Path):
-    annotation_path = directory / "annotations"
-    images_path = directory / "images"
-    result = []
-    for annotation_file in annotation_path.glob("*.json"):
-        for ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
-            image_file = images_path / f"{annotation_file.stem}{ext}"
-            if image_file.exists():
-                result.append((annotation_file, image_file))
-    return result
+    def evaluate(self, threshold: float):
+        val_dataset = dataset.validation_annotations
+        predictions = PredictionList()
+        for i, annotation in enumerate(val_dataset):
+            print(f"Image [{i} / {len(val_dataset)}]", end="\r")
+            outputs = self.run_one(annotation)
+            prediction = Prediction.from_outputs(outputs, annotations=annotation)
+            predictions.merge(prediction)
+        print("Inference finished.")
+        total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
+        # sort by confidence
+        predictions: PredictionList = predictions.sort_by_confidence()
+        tp_flags = []
+        fp_flags = []
+        explored_ground_truth = {}
+        for prediction in predictions:
+            image_name = prediction.annotations.image.url
+            pairs = prediction.annotations.cloth.pairs
+            if image_name not in explored_ground_truth:
+                explored_ground_truth[image_name] = [False] * len(prediction.annotations.cloth.pairs)
+            # now we get the index of the best non explored ground truth
+            max_index = -1
+            last_max = float("-inf")
+            for i, pair in enumerate(pairs):
+                if explored_ground_truth[image_name][i]:
+                    continue
+                pred_button = pair.button
+                pred_fastener = pair.fastener
+                iou = compute_pair_iou(
+                    prediction.button_box,
+                    torch.tensor(pred_button.bbox.to_cxcywh()),
+                    prediction.fastener_box,
+                    torch.tensor(pred_fastener.bbox.to_cxcywh())
+                )
+                if iou > last_max:
+                    last_max = iou
+                    max_index = i
+            if max_index >= 0 and last_max >= threshold: # then ok, this is a true positive
+                tp_flags.append(1)
+                fp_flags.append(0)
+                explored_ground_truth[image_name][max_index] = True
+            else: # else no it is a false positive
+                tp_flags.append(0)
+                fp_flags.append(1)
+        cumulative_tp = np.cumsum(tp_flags)
+        cumulative_fp = np.cumsum(fp_flags)
+        precision = cumulative_tp / np.maximum(cumulative_tp + cumulative_fp, 1)
+        recall = cumulative_tp / total_ground_truths
 
+        return {
+            "threshold": threshold,
+            "precision": precision,
+            "recall": recall,
+            "tp_flags": np.asarray(tp_flags),
+            "fp_flags": np.asarray(fp_flags),
+            "total_ground_truths": total_ground_truths,
+        }
 
-def preprocess_image(image: Image.Image, inference_size: int) -> torch.Tensor:
-    transform = transforms.Compose([
-        transforms.Resize((inference_size, inference_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ])
-    return transform(image).unsqueeze(0)
+        
 
+def init_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--weights", type=str, required=True)
+    parser.add_argument("--dataset", type=str, required=True)
+    parser.add_argument("--device", type=str, required=False, default="cuda")
+    parser.add_argument("--threshold", type=float, required=False, default=0.5)
+    return parser
 
-def normalized_to_pixel_xy(xy: torch.Tensor, width: int, height: int) -> tuple[float, float]:
-    x = float(xy[0]) * width
-    y = float(xy[1]) * height
-    return x, y
-
-
-@torch.no_grad()
-def run_model(model, image: Image.Image, device: torch.device, inference_size: int):
-    width, height = image.size
-    x = preprocess_image(image, inference_size).to(device)
-    # masks: [B, H_img, W_img]
-    masks = torch.zeros([1, height, width], dtype=torch.bool)
-    outputs = model(x, masks)
-    return outputs
-
-
-def get_predictions(image, outputs):
-    width, height = image.size
-    # put on the CPU, and we have only one batch
-    pred_logits = outputs["pred_logits"][0].detach().cpu()      # [Q, C + 1]
-    pred_buttons = outputs["pred_buttons"][0].detach().cpu()    # [Q, 2]
-    # transforms to probabilities
-    pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
-    pred_classes = pred_probs.argmax(dim=-1)
-    pred_scores = pred_probs.max(dim=-1).values
-    # now loop over the queries and get the predictions
-    num_queries, num_classes = pred_logits.size()
-    predictions = []
-    for query_idx in range(num_queries):
-        class_id = int(pred_classes[query_idx])
-        confidence = float(pred_probs[query_idx, BUTTON_CLASS_ID])
-        xy_norm_tensor = pred_buttons[query_idx]
-        pos_x, pos_y = normalized_to_pixel_xy(xy_norm_tensor, width, height)
-        predictions.append(Prediction(class_id, pos_x, pos_y, confidence))
-    return predictions
-
-
-def create_plot(images):
-    fig = plt.figure(figsize=(5, 2))
-    images = [img.resize((512, 512)) for img in images]
-    # Create an ImageGrid with a custom padding (axes_pad) in inches
-    grid = ImageGrid(fig, 111,          # similar to subplot(111)
-                    nrows_ncols=(2, 5), # 2x2 grid
-                    axes_pad=0.1,       # pad between images
-                    )
-
-    for ax, img in zip(grid, images):
-        ax.imshow(img)
-        ax.axis('off')
-    return fig
-
-
-def evaluate_one(
-    annotation_path: Path,
-    image_path: Path,
-    model,
-    device: torch.device,
-    inference_size: int,
-    cost_class: float,
-    cost_coord: float,
-):
-    """
-    For the evaluation, since we don't have bounding boxes,
-    we will consider that a prediction is valid if it is in a 10 pixel radius.
-    We also define a confidence threshold of 95%.
-    """
-    image, annotation = load_image(annotation_path, image_path)
-    image_name = image_path.stem
-    W, H = image.size
-    # run the model and get the output
-    outputs = run_model(model, image, device, inference_size)
-    predictions = outputs["pred_buttons"][0]
-    pred_probabilities = outputs["pred_logits"][0].softmax(-1)
-    button_probabilities = pred_probabilities[:, 0]
-    # sort by confidence
-    order = torch.argsort(button_probabilities, descending=True)
-    predictions = predictions[order]
-    button_probabilities = button_probabilities[order]
-    # now get the targets
-    targets = annotation["buttons"]
-    matched_targets = torch.zeros(len(targets), dtype=torch.bool)
-    # now go over the annotations
-    TP = 0
-    FP = 0
-    FN = 0
-    for confidence, (x, y) in zip(button_probabilities, predictions):
-        if confidence < 0.95:
-            continue
-        x, y = x * W, y * H
-        best_i = None
-        best_distance = float("inf")
-        for i, (target_x, target_y) in enumerate(targets):
-            target_x, target_y = target_x * W, target_y * H
-            if matched_targets[i]:
-                continue
-            distance = math.dist((x, y), (target_x, target_y))
-            if distance <= 10 and distance < best_distance:
-                best_distance = distance
-                best_i = i
-        if best_i is not None:
-            TP += 1
-            matched_targets[best_i] = True
-        else:
-            FP += 1
-    FN = (~matched_targets).sum()
-    return TP, FP, FN
-
-
-def evaluate_directory(
-    directory: Path,
-    model,
-    device: torch.device,
-    inference_size: int,
-    cost_class: float,
-    cost_coord: float,
-):
-    image_files = iter_image_files(directory)
-    if not image_files:
-        raise RuntimeError(f"No image files found in: {directory}")
-    # now perform a few operation to get the losses
-    # first, report the mean button loss of the buttons
-    mean_button_loss = 0.0
-    TPs, FPs, FNs = 0, 0, 0
-    nb_image = len(image_files)
-    for i, (annotation_path, image_path) in enumerate(image_files):
-        TP, FP, FN = evaluate_one(
-            annotation_path=annotation_path,
-            image_path=image_path,
-            model=model,
-            device=device,
-            inference_size=inference_size,
-            cost_class=cost_class,
-            cost_coord=cost_coord
-        )
-        TPs += TP
-        FPs += FP
-        FNs += FN
-        precision = TPs / (TPs + FPs)
-        recall = TPs / (TPs + FNs)
-        F1 = (2 * TPs) / (2 * TPs + FPs + FNs)
-        print(f"Eval[{i:<5}/{nb_image}]: precision={precision:.4f}, recall={recall:.4f}, F1={F1:.4f}", end="\r")
-    # then report precision, recall and F1
-    precision = TPs / (TPs + FPs)
-    recall = TPs / (TPs + FNs)
-    F1 = (2 * TPs) / (2 * TPs + FPs + FNs)
-    print("Evaluation report:")
-    print(f"- precision: {precision:.4f}")
-    print(f"- recall: {recall:.4f}")
-    print(f"- F1: {F1:.4f}")
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate DETR-style model."
-    )
-
-    parser.add_argument(
-        "-m",
-        "--model",
-        type=str,
-        default="good_run_8",
-        help="Model name without extension, looked up in CHECKPOINT_DIR.",
-    )
-
-    parser.add_argument(
-        "-i",
-        "--input",
-        type=str,
-        default="dataset_finetune",
-        help="Image stem, image path, or directory.",
-    )
-
-    parser.add_argument(
-        "--inference-size",
-        type=int,
-        default=INFERENCE_SIZE,
-        help="Input resolution used at inference.",
-    )
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-
-    model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
-    model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
-
-    model_config_path = Path("good_runs/new_model.json")
-    model_weights_path = Path("finetune_checkpoints/best.pt")
-
-    if not model_config_path.exists():
-        raise FileNotFoundError(f"Model config not found: {model_config_path}")
-
-    if not model_weights_path.exists():
-        raise FileNotFoundError(f"Model weights not found: {model_weights_path}")
-
-    model = load_model(
-        model_config_path=model_config_path,
-        model_weights_path=model_weights_path,
-        device=DEVICE,
-    )
-
-    # get the class cost and coord cost
-    path = Path(model_config_path)
-    with open(path, "r") as file:
-        data = json.load(file)
-        cost_class = data["training_parameters"]["cost_class"]
-        cost_coord = data["training_parameters"]["cost_coord"]
-
-    input_path = Path(args.input)
-
-    if input_path.exists() and input_path.is_dir():
-        evaluate_directory(
-            directory=input_path,
-            model=model,
-            device=DEVICE,
-            inference_size=args.inference_size,
-            cost_class=cost_class,
-            cost_coord=cost_coord
-        )
-
-# # Mean button loss (mean norm 2 distance): 0.0729093998670578
 
 if __name__ == "__main__":
-    main()
+    parser = init_parser()
+    args = parser.parse_args()
+    # get the arguments
+    model_path = Path(args.model)
+    weights_path = Path(args.weights)
+    dataset_path = Path(args.dataset)
+    device_name = args.device
+    threshold = args.threshold
+    # get the device
+    device = torch.device(device_name)
+    print("Using device:", device)
+    # load the model and its weights
+    model = build_model_from(model_path)
+    model.to(device=device)
+    load_weights(model, weights=weights_path, device=device)
+    # get the dataset
+    dataset = DatasetConfig.open(config_path=dataset_path).load()
+    # now evaluate a dataset based on the dataset cache it has
+    evaluator = Evaluator(model, dataset, threshold, device)
+    result = evaluator.evaluate(threshold=50)
+
+    import matplotlib.pyplot as plt
+    plt.plot(result["precision"], result["recall"])
+    plt.show()

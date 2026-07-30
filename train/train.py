@@ -11,38 +11,10 @@ from torchvision import transforms as T
 from model.prtr import PRTR, build_model
 from model.criterion import HungarianMatcher, SetCriterion
 from model.config import ModelConfig
+from model.utils import load_weights
 from dataformat.dataset import DatasetConfig, Annotation
 from train.transforms import TrainingTransform, ValidationTransform
-
-
-def collate_fn(batch):
-    """
-    Padds and computes each image mask for the given batch.
-    """
-    images, targets = zip(*batch)
-    # get the maximum image size of the batch
-    max_h = max(img.shape[1] for img in images)
-    max_w = max(img.shape[2] for img in images)
-    # targets: list of [Annotation]
-
-    batch_size = len(images)
-    channels = images[0].shape[0]
-    dtype = images[0].dtype
-    # initialize the tensors that will contain the batch
-    # the mask is: 0 means image data ; 1 means padded data (to be ignored)
-    # [B, C, max H, max W]
-    padded_images = torch.zeros((batch_size, channels, max_h, max_w), dtype=dtype)
-    padding_mask = torch.ones((batch_size, max_h, max_w), dtype=torch.bool)
-
-    new_targets = []
-    for i, (image, target) in enumerate(zip(images, targets)):
-        _, h, w = image.shape
-        padded_images[i, :, :h, :w] = image
-        padding_mask[i, :h, :w] = False
-        new_targets.append(target)
-    # take the new common size
-    common_size = (max_w, max_h)
-    return padded_images, padding_mask, new_targets, common_size
+from .commons import collate_fn
 
 
 def seed_worker(worker_id: int):
@@ -79,12 +51,9 @@ class Trainer:
     def _annotations_to_tensor(self, annotations: list[Annotation], device):
         targets = []
         for annotation in annotations:
-            coord_buttons, coord_fasteners = annotation.to_tensor()
-            coord_buttons = coord_buttons.to(device=device)
-            coord_fasteners = coord_fasteners.to(device=device)
-            labels = torch.zeros(coord_buttons.size()[0], dtype=torch.long, device=device)
+            classes, coord_buttons, coord_fasteners = annotation.to_tensor(device=device)
             targets.append({
-                "labels": labels,
+                "labels": classes,
                 "buttons": coord_buttons,
                 "keypoints": coord_fasteners
             })
@@ -198,7 +167,7 @@ def load_weights(model, weights: Path, device):
     if not weights.exists():
         raise FileNotFoundError(f"Checkpoint not found: {weights}")
     checkpoint = torch.load(weights, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(checkpoint)
 
 
 def freeze_backbone(model):

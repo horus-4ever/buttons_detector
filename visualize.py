@@ -396,8 +396,8 @@ def main():
     model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
     model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
 
-    model_config_path = Path("model.json")
-    model_weights_path = Path("checkpoints/best.pt")
+    #model_config_path = Path("model.json")
+    #model_weights_path = Path("checkpoints/best.pt")
 
     if not model_config_path.exists():
         raise FileNotFoundError(f"Model config not found: {model_config_path}")

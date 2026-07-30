@@ -13,11 +13,11 @@ class BoundingBox:
     w: float
     h: float
 
-    def to_tensor(self):
+    def to_tensor(self, device = None):
         """
         Return the bounding box as a torch tensor.
         """
-        return torch.tensor([self.cx, self.cy, self.w, self.h], dtype=torch.float)
+        return torch.tensor([self.cx, self.cy, self.w, self.h], dtype=torch.float, device=device)
 
     def to_json(self):
         return {
@@ -47,6 +47,9 @@ class BoundingBox:
         y2 = self.cy + self.h / 2
         return (x1, y1, x2, y2)
 
+    def to_cxcywh(self) -> tuple[float, float, float, float]:
+        return (self.cx, self.cy, self.w, self.h)
+
 
 @dataclass
 class Button:
@@ -56,11 +59,11 @@ class Button:
     bbox: BoundingBox
     visible: bool
 
-    def to_tensor(self):
+    def to_tensor(self, device = None):
         """
         Return the bbox as a torch tensor.
         """
-        return self.bbox.to_tensor()
+        return self.bbox.to_tensor(device=device)
 
     def to_json(self):
         return {
@@ -86,11 +89,11 @@ class Fastener:
     visible: bool
     type: str
 
-    def to_tensor(self):
+    def to_tensor(self, device = None):
         """
         Return the bbox as a torch tensor.
         """
-        return self.bbox.to_tensor()
+        return self.bbox.to_tensor(device=device)
 
     def to_json(self):
         return {
@@ -189,20 +192,24 @@ class Annotation:
     image: ImageInfo
     cloth: Cloth
 
-    def to_tensor(self):
+    def to_tensor(self, device = None):
         """
         Returns the annotations for the image a a tensor.
         The image is not returned.
-        - returns: [n_buttons, 4]
+        - returns:
+            . labels_button: [n_buttons, 4]
+            . labels_fastener: [n_buttons, 4]
+            . classes: [n_buttons]
         """
         pairs = self.cloth.pairs
         if pairs:
-            labels_button = torch.stack([label.button.to_tensor() for label in pairs])
-            labels_fastener = torch.stack([label.fastener.to_tensor() for label in pairs])
+            labels_button = torch.stack([label.button.to_tensor(device=device) for label in pairs])
+            labels_fastener = torch.stack([label.fastener.to_tensor(device=device) for label in pairs])
         else:
-            labels_button = torch.tensor([])
-            labels_fastener = torch.tensor([])
-        return labels_button, labels_fastener
+            labels_button = torch.tensor([], device=device)
+            labels_fastener = torch.tensor([], device=device)
+        classes = torch.zeros(labels_button.size()[0], dtype=torch.long, device=device)
+        return classes, labels_button, labels_fastener
 
     def to_json(self):
         return {
