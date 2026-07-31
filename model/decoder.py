@@ -61,7 +61,7 @@ class Decoder(nn.Module):
                 spatial_shapes=spatial_shapes,
                 query_embed=query_embed,
                 refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
-                memory_key_padding_mask=memory_key_padding_mask
+                memory_key_padding_mask=memory_key_padding_mask # [B, 1, sum_l(Hl, Wl)]
             )
             decoder_attn_weights.append(attn_weights)
             decoder_sampling_locations.append(sampling_locations)
@@ -142,7 +142,7 @@ class DecoderLayer(nn.Module):
         - reference_points: [query_len, RpQ, 2]
         - query_embed: [num_queries, embed_dim]
         - refpoints_embed: [RpQ, embed_dim]
-        - memory_key_padding_mask: 
+        - memory_key_padding_mask: [B, 1, sum_l(Hl, Wl)]
         """
         B, Q, RQP, C = input.size()
         # [B, num_queries, RpQ, embed_dim] -> [B, RpQ * num_queries, embed_dim]
@@ -152,7 +152,10 @@ class DecoderLayer(nn.Module):
         k_queries = q_queries = self.with_queries_embed(input, query_embed, refpoints_embed)
         v_queries = input
         # compute self-attention on queries and dropout
-        queries_attention_out = self.queries_attention(q_queries, k_queries, v_queries)[0]
+        queries_attention_out = self.queries_attention(
+            q_queries, k_queries, v_queries,
+            key_padding_mask=None
+        )[0]
         queries_attention_out = self.dropout1(queries_attention_out)
         # add and normalize
         # add_norm_out: [B, num_queries * RpQ, embed_dim]
@@ -175,7 +178,7 @@ class DecoderLayer(nn.Module):
             reference_points=reference_points, # [batch, query_len * RpQ, num_levels, 2]
             values=v_memory, # [B, query_len, embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
-            key_padding_mask=memory_key_padding_mask, # 
+            key_padding_mask=memory_key_padding_mask, # [B, 1, sum_l(Hl, Wl)]
         )
         # memory_attention_weights: [batch, query_len, heads, num_levels, num_points]
         # result: [B, Q * RpQ, embed_dim]

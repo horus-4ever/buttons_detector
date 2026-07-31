@@ -315,6 +315,7 @@ class MultiscaleDeformableAttention(nn.Module):
         - values: [batch, sum_l(Hl * Wl), embed_dim]
         - spatial_shapes: [num_levels, 2] (height, width of each feature level)
         - reference_points: [batch, query_len, num_levels, 2]
+        - key_padding_mask: [B, 1, query_len]
 
         - output:       [batch, query_len, embed_dim]
         - attn_weights: [batch, query_len, heads, num_levels, num_points]
@@ -332,7 +333,7 @@ class MultiscaleDeformableAttention(nn.Module):
         v = self.v_proj(values) # [B, sum_l(Hl * Wl), embed_dim]
         if key_padding_mask is not None:
             if key_padding_mask.dim() == 3:
-                key_padding_mask = key_padding_mask.squeeze(1)
+                key_padding_mask = key_padding_mask.squeeze(1) # [B, sum_l(Hl, Wl)]
             key_padding_mask = key_padding_mask.to(torch.bool)
             v = v.masked_fill(key_padding_mask[..., None], 0.0)
         v = v.view(batch_size, -1, self.num_heads, self.head_dim)

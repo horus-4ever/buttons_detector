@@ -134,7 +134,7 @@ class EncoderLayer(nn.Module):
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query=query, # [batch, query_len, embed_dim]
             values=input, # [batch, sum_l(Hl~ * Wl~), embed_dim]
-            key_padding_mask=src_key_padding_mask
+            key_padding_mask=src_key_padding_mask # [B, 1, sum_l(Hl, Wl)]
         )
         # [B, query_len, embed_dim]
         self_att_out = self.dropout1(self_att_out)
