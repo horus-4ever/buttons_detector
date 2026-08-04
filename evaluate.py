@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from torchvision import transforms
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from mpl_toolkits.axes_grid1 import ImageGrid
 from dataformat.dataformat import *
 from dataformat.dataset import DatasetConfig
@@ -45,7 +46,7 @@ class Prediction:
         predictions = PredictionList()
         for b in range(B):
             for q in range(Q):
-                button_box, fastener_box = object_boxes[q]
+                button_box, fastener_box = object_boxes[q] # [RpQ, 4]
                 prediction = cls(
                     button_box=button_box,
                     fastener_box=fastener_box,
@@ -141,61 +142,28 @@ class Evaluator:
 
     def evaluate(self, threshold: float):
         val_dataset = dataset.validation_annotations
-        predictions = PredictionList()
+        mAP_buttons = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
         for i, annotation in enumerate(val_dataset):
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
-            prediction = Prediction.from_outputs(outputs, annotations=annotation)
-            predictions.merge(prediction)
+            pred_boxes = outputs["pred_boxes"].detach()[0] # [Q, RpQ, 4]
+            probs = outputs["pred_logits"].softmax(-1).detach()[0] # [Q, num_classes+1]
+            predicted_classes = probs.argmax(dim=-1)  # [Q]
+            Q, *_ = pred_boxes.size()
+            mAP_buttons.update(
+                [{
+                    "boxes": pred_boxes[predicted_classes == 0][:, 0, :], # only the pair boxes
+                    "scores": probs[predicted_classes == 0][:, 0],
+                    "labels": predicted_classes[predicted_classes == 0]
+                }],
+                [{
+                    "boxes": torch.stack([pair.button.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                    "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
+                }]
+            )
         print("Inference finished.")
         total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
-        # sort by confidence
-        predictions: PredictionList = predictions.sort_by_confidence()
-        tp_flags = []
-        fp_flags = []
-        explored_ground_truth = {}
-        for prediction in predictions:
-            image_name = prediction.annotations.image.url
-            pairs = prediction.annotations.cloth.pairs
-            if image_name not in explored_ground_truth:
-                explored_ground_truth[image_name] = [False] * len(prediction.annotations.cloth.pairs)
-            # now we get the index of the best non explored ground truth
-            max_index = -1
-            last_max = float("-inf")
-            for i, pair in enumerate(pairs):
-                if explored_ground_truth[image_name][i]:
-                    continue
-                pred_button = pair.button
-                pred_fastener = pair.fastener
-                iou = compute_pair_iou(
-                    prediction.button_box,
-                    torch.tensor(pred_button.bbox.to_cxcywh()),
-                    prediction.fastener_box,
-                    torch.tensor(pred_fastener.bbox.to_cxcywh())
-                )
-                if iou > last_max:
-                    last_max = iou
-                    max_index = i
-            if max_index >= 0 and last_max >= threshold: # then ok, this is a true positive
-                tp_flags.append(1)
-                fp_flags.append(0)
-                explored_ground_truth[image_name][max_index] = True
-            else: # else no it is a false positive
-                tp_flags.append(0)
-                fp_flags.append(1)
-        cumulative_tp = np.cumsum(tp_flags)
-        cumulative_fp = np.cumsum(fp_flags)
-        precision = cumulative_tp / np.maximum(cumulative_tp + cumulative_fp, 1)
-        recall = cumulative_tp / total_ground_truths
-
-        return {
-            "threshold": threshold,
-            "precision": precision,
-            "recall": recall,
-            "tp_flags": np.asarray(tp_flags),
-            "fp_flags": np.asarray(fp_flags),
-            "total_ground_truths": total_ground_truths,
-        }
+        return mAP_buttons.compute(), total_ground_truths
 
         
 
@@ -231,6 +199,4 @@ if __name__ == "__main__":
     evaluator = Evaluator(model, dataset, threshold, device)
     result = evaluator.evaluate(threshold=0.5)
 
-    import matplotlib.pyplot as plt
-    plt.plot(result["recall"], result["precision"])
-    plt.show()
+    print("mAP:", result[0]) ; exit(0)

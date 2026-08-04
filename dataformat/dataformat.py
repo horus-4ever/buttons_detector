@@ -15,7 +15,7 @@ class BoundingBox:
 
     def to_tensor(self, device = None):
         """
-        Return the bounding box as a torch tensor.
+        Return the bounding box as a torch tensor (cx, cy, w, h).
         """
         return torch.tensor([self.cx, self.cy, self.w, self.h], dtype=torch.float, device=device)
 
