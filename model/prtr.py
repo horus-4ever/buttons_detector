@@ -78,14 +78,13 @@ class PRTR(nn.Module):
         for feature_map in feature_maps:
             # feature_map: [B, embed_dim, Hl, Wl]
             _, _, H, W = feature_map.size()
-            height_indices = torch.tensor(torch.round(torch.linspace(0.5 / H, (1.0 - 0.5 / H), H) * H_img), dtype=torch.int, device=feature_map.device)
-            width_indices = torch.tensor(torch.round(torch.linspace(0.5 / W, 1.0 - 0.5 / W, W) * W_img), dtype=torch.int, device=feature_map.device)
-            h_indices, w_indices = torch.meshgrid(height_indices, width_indices, indexing='ij')
-            # [B, Hl, Wl]
-            level_map = masks[:, h_indices, w_indices]
-            # [B, Hl, Wl] -> [B, 1, Hl, Wl]
-            level_map = level_map[:, None, :, :]
-            output.append(level_map)
+            size = (H, W)
+            level_mask = F.interpolate(
+                masks[:, None].float(),
+                size=size,
+                mode="nearest",
+            ).to(torch.bool)
+            output.append(level_mask)
         return output
 
 

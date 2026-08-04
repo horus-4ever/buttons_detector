@@ -54,12 +54,10 @@ class HungarianMatcher(nn.Module):
 
         for b in range(bs):
             tgt_labels = targets[b]["labels"]     # [num_gt] number of ground-truth buttons (2, 3, 4, 5, 6, 7)
-            # print(tgt_labels)
-            tgt_coords = targets[b]["buttons"]    # [num_gt, 4]
-            tgt_holes = targets[b]["keypoints"]
-            # print(tgt_coords)
+            tgt_buttons = targets[b]["buttons"]    # [num_gt, 4]
+            tgt_holes = targets[b]["keypoints"]   # [num_gt, 4]
 
-            if tgt_coords.numel() == 0:
+            if tgt_buttons.numel() == 0:
                 indices.append((
                     torch.empty(0, dtype=torch.int64),
                     torch.empty(0, dtype=torch.int64)
@@ -72,12 +70,20 @@ class HungarianMatcher(nn.Module):
             cost_class = -out_prob[b][:, tgt_labels]
 
             # Coordinate cost
-            # out_coord[b]: [Q, 4], tgt_coords: [num_gt, 4]
-            cost_coord = torch.cdist(out_coord[b], tgt_coords, p=1)
+            # out_coord[b]: [Q, 4], tgt_buttons: [num_gt, 4]
+            cost_coord = torch.cdist(out_coord[b], tgt_buttons, p=1)
             cost_hole = torch.cdist(pred_holes[b], tgt_holes, p=1)
-            # TODO: add a giou cost
-            cost_giou = -compute_giou(out_coord[b], pred_holes[b])
-            # Total cost
+            # compute the GIoU cost for each pair
+            giou_buttons = compute_giou(
+                pred_buttons[b][:, None, :], # [Q, 1, 4]
+                tgt_buttons[None, :, :], # [1, N, 4]
+            ) # [Q, N]
+            giou_holes = compute_giou(
+                pred_holes[b][:, None, :], # [Q, 1, 4]
+                tgt_holes[None, :, :], # [1, N, 4]
+            ) # [Q, N]
+            cost_giou = -(giou_buttons + giou_holes)
+            # total cost
             C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole) + cost_giou
             C = C.cpu()
 

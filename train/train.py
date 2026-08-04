@@ -188,7 +188,8 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     dataset_config = DatasetConfig.open(parameters.dataset)
     dataset_config.load() # builds cache
     train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
-    train_dataset.transform = TrainingTransform()
+    sizes = (512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864)
+    train_dataset.transform = TrainingTransform(sizes)
     val_dataset.transform = ValidationTransform(512)
 
     # create the data loaders
