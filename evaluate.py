@@ -146,8 +146,8 @@ class Evaluator:
         for i, annotation in enumerate(val_dataset):
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
-            pred_boxes = outputs["pred_boxes"].detach()[0] # [Q, RpQ, 4]
-            probs = outputs["pred_logits"].softmax(-1).detach()[0] # [Q, num_classes+1]
+            pred_boxes = outputs["pred_boxes"].detach().cpu()[0] # [Q, RpQ, 4]
+            probs = outputs["pred_logits"].softmax(-1).detach().cpu()[0] # [Q, num_classes+1]
             predicted_classes = probs.argmax(dim=-1)  # [Q]
             Q, *_ = pred_boxes.size()
             mAP_buttons.update(
