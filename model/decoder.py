@@ -1,6 +1,6 @@
 from torch import nn, Tensor
 import torch.nn.functional as F
-from model.utils import FFN
+from model.utils import FFN, inverse_sigmoid
 import torch
 from typing import Optional
 from .attention import MultiscaleDeformableAttention, MultiscaleMultireferencesDeformableAttention
@@ -34,14 +34,26 @@ class Decoder(nn.Module):
             for _ in range(nlayers)
         ])
         self.num_ref_points_per_query = nrefpointsperquery
+        # NEW: now we refine the reference points
+        # we create one learnable refiner projection per decoder layer
+        self.bbox_refiners = nn.ModuleList(
+            [nn.Linear(d_model, 4) for _ in range(nlayers)]
+        )
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
+        self._init_parameters()
 
-    def forward(self, input, memory, reference_points, spatial_shapes, query_embed: Optional[Tensor], refpoints_embed, memory_key_padding_mask: Optional[Tensor] = None):
+    def _init_parameters(self):
+        # initialize the refiners so that they begin at 0
+        for refiner in self.bbox_refiners:
+            nn.init.zeros_(refiner.weight) # type: ignore
+            nn.init.zeros_(refiner.bias) # type: ignore
+
+    def forward(self, input, memory, partial_bboxes, spatial_shapes, query_embed: Optional[Tensor], refpoints_embed, memory_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [B, num_queries, embed_dim]
         - memory: [B, sum_l(Hl * Wl), embed_dim]
-        - reference_points: [num_queries, 2]
+        - partial_bboxes: [B, num_queries, RpQ, 4]
         - spatial_shapes: [num_levels, 2]
         - pos: [B, suml(Hl * Wl), embed_dim]
         - query_embed: [num_queries, embed_dim]
@@ -53,11 +65,12 @@ class Decoder(nn.Module):
         # loop over the decoder layers
         B, Q, C = input.size()
         output = input[:, :, None, :].expand(B, Q, self.num_ref_points_per_query, C).contiguous()
-        for layer in self.layers:
+        intermediate_bboxes = []
+        for num_layer, layer in enumerate(self.layers):
             output, attn_weights, sampling_locations = layer(
                 input=output,
                 memory=memory,
-                reference_points=reference_points,
+                partial_bboxes=partial_bboxes, # [B, num_queries, RpQ, 4]
                 spatial_shapes=spatial_shapes,
                 query_embed=query_embed,
                 refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
@@ -65,10 +78,19 @@ class Decoder(nn.Module):
             )
             decoder_attn_weights.append(attn_weights)
             decoder_sampling_locations.append(sampling_locations)
+            # refine the reference points for the decoder layers
+            # -> [B, num_queries, RpQ, 4]
+            bbox_deltas = self.bbox_refiners[num_layer](output)
+            partial_bboxes = (inverse_sigmoid(partial_bboxes) + bbox_deltas)
+            partial_bboxes = partial_bboxes.sigmoid()
+            # here, take the reference point and return it
+            intermediate_bboxes.append(partial_bboxes)
+            # now detach it for next layer use
+            partial_bboxes = partial_bboxes.detach()
         # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
         # normalize and return
         output = self.norm(output)
-        return output, decoder_attn_weights, decoder_sampling_locations
+        return output, decoder_attn_weights, decoder_sampling_locations, intermediate_bboxes
 
 
 class DecoderLayer(nn.Module):
@@ -135,11 +157,11 @@ class DecoderLayer(nn.Module):
         refpoints_embed = refpoints_embed.view(Q * self.num_ref_points_per_query, C)
         return tensor + query_embed + refpoints_embed
 
-    def forward(self, input, memory, reference_points, spatial_shapes, query_embed: Tensor, refpoints_embed, memory_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, memory, partial_bboxes, spatial_shapes, query_embed: Tensor, refpoints_embed, memory_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [B, num_queries, RpQ, embed_dim]
         - memory: [B, query_len, embed_dim]
-        - reference_points: [query_len, RpQ, 2]
+        - partial_bboxes: [B, num_queries, RpQ, 4]
         - query_embed: [num_queries, embed_dim]
         - refpoints_embed: [RpQ, embed_dim]
         - memory_key_padding_mask: [B, 1, sum_l(Hl, Wl)]
@@ -167,15 +189,15 @@ class DecoderLayer(nn.Module):
         v_memory = memory # [B, query_len, embed_dim]
         # [B, num_queries * RqP, embed_dim]
         q_memory = self.with_queries_embed(add_norm_out, query_embed, refpoints_embed)
-        # resize the reference_points to the right size
-        # [query_len, RpQ, 2] -> [query_len * RpQ, 2]
-        reference_points = reference_points.view(Q * self.num_ref_points_per_query, 2)
-        # [query_len * RpQ, 2] -> [batch, query_len * RpQ, num_levels, 2]
-        reference_points = reference_points[None, :, None, :].expand(B, Q * self.num_ref_points_per_query, self.num_levels, 2)
+        # resize the partial_bboxes to the right size
+        # [B, query_len, RpQ, 4] -> [B, query_len * RpQ, 4]
+        partial_bboxes = partial_bboxes.view(B, Q * self.num_ref_points_per_query, 4)
+        # [B, query_len * RpQ, 4] -> [B, query_len * RpQ, num_levels, 4]
+        partial_bboxes = partial_bboxes[:, :, None, :].expand(B, Q * self.num_ref_points_per_query, self.num_levels, 4)
         # compute self-attention
         memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.memory_attention(
             query=q_memory, # [B, num_queries, embed_dim]
-            reference_points=reference_points, # [batch, query_len * RpQ, num_levels, 2]
+            reference_points=partial_bboxes[..., :2], # [B, query_len * RpQ, num_levels, 2]
             values=v_memory, # [B, query_len, embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             key_padding_mask=memory_key_padding_mask, # [B, 1, sum_l(Hl, Wl)]

@@ -148,9 +148,13 @@ class SetCriterion(nn.Module):
     def loss_buttons(self, outputs, targets, indices):
         # WARNING: outputs are now of shape [B, Q, RqP, 4]
         src_coords = outputs["pred_boxes"]  # [B, Q, RqP, 4]
+        # NEW: we have intermediate predictions for the bounding boxes
+        intermediate_coords = outputs["partial_bboxes"] # num_layers * [B, Q, RqP, 4]
+        # -> [num_layers, B, Q, RqP, 4]
+        intermediate_coords = torch.stack(intermediate_coords, dim=0)
         # split into buttons and keypoints
-        src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
-        src_keypoints_coords = src_coords[:, :, 1, :] # [B, Q, 4]
+        src_button_coords = intermediate_coords[:, :, :, 0, :] # [num_layers, B, Q, 4]
+        src_keypoints_coords = intermediate_coords[:, :, :, 1, :] # [num_layers, B, Q, 4]
 
         matched_button_coords = []
         matched_keypoints_coords = []
@@ -159,25 +163,38 @@ class SetCriterion(nn.Module):
         # get the matched button and keypoint predictions
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) > 0:
-                matched_button_coords.append(src_button_coords[b, src_idx])
-                matched_keypoints_coords.append(src_keypoints_coords[b, src_idx])
+                matched_button_coords.append(src_button_coords[:, b, src_idx])
+                matched_keypoints_coords.append(src_keypoints_coords[:, b, src_idx])
                 matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
                 matched_keypoints_target.append(targets[b]["keypoints"][tgt_idx].to(src_coords.device))
         # if there is no predictions, then the loss is null
         if len(matched_button_coords) == 0:
             loss_button = torch.tensor(0.0, device=src_coords.device)
         else:
-            # [B, Q, 4] -> [B * Q, 4]
-            matched_button_coords = torch.cat(matched_button_coords, dim=0)
-            # [B, Q, 4] -> [B * Q, 4]
-            matched_keypoints_coords = torch.cat(matched_keypoints_coords, dim=0)
+            n_layers, n_pred, _ = matched_button_coords[0].shape
+            # B * [num_layers, n_pred, 4] -> [num_layers, B * n_pred, 4]
+            matched_button_coords = torch.cat(matched_button_coords, dim=1)
+            # B * [num_layers, n_pred, 4] -> [num_layers, B * n_pred, 4]
+            matched_keypoints_coords = torch.cat(matched_keypoints_coords, dim=1)
+            # B * [n_pred, 4] -> [B * n_pred, 4]
             matched_button_target = torch.cat(matched_button_target, dim=0)
+            # [B * n_pred, 4] -> [num_layers, B * n_pred, 4]
+            matched_button_target = matched_button_target.unsqueeze(0).expand(n_layers, -1, -1).contiguous()
+            # B * [n_pred, 4] -> [B * n_pred, 4]
             matched_keypoints_target = torch.cat(matched_keypoints_target, dim=0)
+            # [B * n_pred, 4] -> [num_layers, B * n_pred, 4]
+            matched_keypoints_target = matched_keypoints_target.unsqueeze(0).expand(n_layers, -1, -1).contiguous()
             # now we define the loss
             # we first compute two independent losses for buttons and keypoints
-            loss_buttons = F.l1_loss(matched_button_coords, matched_button_target)
-            loss_keypoints = F.l1_loss(matched_keypoints_coords, matched_keypoints_target)
-            loss_button = loss_buttons + loss_keypoints
+            loss_buttons = F.l1_loss(matched_button_coords, matched_button_target, reduction="none")
+            loss_buttons = loss_buttons.mean(dim=(1, 2)) # [num_layers]
+            loss_keypoints = F.l1_loss(matched_keypoints_coords, matched_keypoints_target, reduction="none")
+            loss_keypoints = loss_keypoints.mean(dim=(1, 2)) # [num_layers]
+            # we want to weight the contribution of each layer from the first to the last
+            # we assume that the last layer is the most important, and we want to give it more weight
+            weights = torch.linspace(0.1, 1, n_layers, device=loss_buttons.device, dtype=loss_buttons.dtype)
+            loss_button = (loss_buttons + loss_keypoints) * weights
+            loss_button = loss_button.sum() / weights.sum()
         return {"loss_button": loss_button}
     
     def loss_giou(self, outputs, targets, indices):

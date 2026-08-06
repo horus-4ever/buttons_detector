@@ -59,7 +59,7 @@ class PRTR(nn.Module):
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
+        self.bbox_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -114,7 +114,7 @@ class PRTR(nn.Module):
             pos_embed = self.position_embedding(mask)
             position_embeddings.append(pos_embed)
 
-        hs, encoder_attn_maps, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, reference_points = self.transformer(
+        hs, encoder_attn_maps, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, partial_bboxes = self.transformer(
             features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
@@ -122,21 +122,14 @@ class PRTR(nn.Module):
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
-        # reference_points: [num_queries, RpQ, 4]
-        Q, num_ref_points_per_query, _ = reference_points.size()
+        # partial_bboxes: n_layers * [num_queries, RpQ, 4]
         # NEW: the button head now predicts the bounding box
         # -> [B, Q, embed_dim]
         class_head_input = hs.mean(dim=2) # take the mean over RpQ
         pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
         # for the buttons we of course need to keep by RpQ
         # [B, query_len, RpQ, 4]
-        button_deltas = self.button_head(hs) # [B, Q, RpQ, 4]
-        # take the button centers, which are the first two coordinates
-        button_centers = button_deltas[..., :2] # [B, Q, RpQ, 2]
-        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, Q, RpQ, 2]
-        # now the width and height is given by the last two coordinates
-        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
-        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, Q, RpQ, 4]
+        pred_boxes = partial_bboxes[-1]
 
         return {
             "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
@@ -146,7 +139,7 @@ class PRTR(nn.Module):
             "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
             "decoder_sampling_locations": decoder_sampling_locations, # [batch, num_queries, heads, num_levels, num_points, 2]
             "spatial_shapes": spatial_shapes, # [num_levels, 2]
-            "reference_points": reference_points, # [query_len, RpQ, 2]
+            "partial_bboxes": partial_bboxes, # n_layers * [query_len, RpQ, 4]
             "image_size": (H, W)
         }
 
