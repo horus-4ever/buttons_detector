@@ -143,11 +143,12 @@ class Evaluator:
     def evaluate(self, threshold: float):
         val_dataset = dataset.validation_annotations
         mAP_buttons = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
+        mAP_fasteners = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
         for i, annotation in enumerate(val_dataset):
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
-            pred_boxes = outputs["pred_boxes"].detach()[0] # [Q, RpQ, 4]
-            probs = outputs["pred_logits"].softmax(-1).detach()[0] # [Q, num_classes+1]
+            pred_boxes = outputs["pred_boxes"].detach().cpu()[0] # [Q, RpQ, 4]
+            probs = outputs["pred_logits"].softmax(-1).detach().cpu()[0] # [Q, num_classes+1]
             predicted_classes = probs.argmax(dim=-1)  # [Q]
             Q, *_ = pred_boxes.size()
             mAP_buttons.update(
@@ -161,9 +162,20 @@ class Evaluator:
                     "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
                 }]
             )
+            mAP_fasteners.update(
+                [{
+                    "boxes": pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
+                    "scores": probs[predicted_classes == 0][:, 1],
+                    "labels": predicted_classes[predicted_classes == 0]
+                }],
+                [{
+                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                    "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
+                }]
+            )
         print("Inference finished.")
         total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
-        return mAP_buttons.compute(), total_ground_truths
+        return mAP_buttons.compute(), mAP_fasteners.compute(), total_ground_truths
 
         
 
@@ -197,6 +209,7 @@ if __name__ == "__main__":
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # now evaluate a dataset based on the dataset cache it has
     evaluator = Evaluator(model, dataset, threshold, device)
-    result = evaluator.evaluate(threshold=0.5)
+    mAP_buttons, mAP_fasteners, _ = evaluator.evaluate(threshold=0.5)
 
-    print("mAP:", result[0]) ; exit(0)
+    print("~ mAP_buttons:", mAP_buttons)
+    print("~ mAP_fasteners: ", mAP_fasteners)
