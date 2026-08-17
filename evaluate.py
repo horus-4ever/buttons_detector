@@ -143,7 +143,8 @@ class Evaluator:
     def evaluate(self, threshold: float):
         val_dataset = dataset.validation_annotations
         mAP_buttons = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
-        mAP_fasteners = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
+        mAP_fasteners_v = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
+        mAP_fasteners_i = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
         for i, annotation in enumerate(val_dataset):
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
@@ -151,6 +152,10 @@ class Evaluator:
             probs = outputs["pred_logits"].softmax(-1).detach().cpu()[0] # [Q, num_classes+1]
             predicted_classes = probs.argmax(dim=-1)  # [Q]
             Q, *_ = pred_boxes.size()
+            # some useful variables
+            nb_pairs = len(annotation.cloth.pairs)
+            nb_visible_fasteners = sum(1 for pair in annotation.cloth.pairs if pair.fastener.visible)
+            nb_invisible_fasteners = nb_pairs - nb_visible_fasteners
             mAP_buttons.update(
                 [{
                     "boxes": pred_boxes[predicted_classes == 0][:, 0, :], # only the pair boxes
@@ -162,20 +167,31 @@ class Evaluator:
                     "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
                 }]
             )
-            mAP_fasteners.update(
+            mAP_fasteners_v.update(
                 [{
                     "boxes": pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
                     "scores": probs[predicted_classes == 0][:, 1],
                     "labels": predicted_classes[predicted_classes == 0]
                 }],
                 [{
-                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
-                    "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
+                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs if pair.fastener.visible]),
+                    "labels": torch.tensor([0] * nb_visible_fasteners, dtype=torch.int64)
+                }]
+            )
+            mAP_fasteners_i.update(
+                [{
+                    "boxes": pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
+                    "scores": probs[predicted_classes == 0][:, 1],
+                    "labels": predicted_classes[predicted_classes == 0]
+                }],
+                [{
+                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs if not pair.fastener.visible]),
+                    "labels": torch.tensor([0] * nb_invisible_fasteners, dtype=torch.int64)
                 }]
             )
         print("Inference finished.")
         total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
-        return mAP_buttons.compute(), mAP_fasteners.compute(), total_ground_truths
+        return mAP_buttons.compute(), mAP_fasteners_v.compute(), mAP_fasteners_i.compute(), total_ground_truths
 
         
 
@@ -209,7 +225,8 @@ if __name__ == "__main__":
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # now evaluate a dataset based on the dataset cache it has
     evaluator = Evaluator(model, dataset, threshold, device)
-    mAP_buttons, mAP_fasteners, _ = evaluator.evaluate(threshold=0.5)
+    mAP_buttons, mAP_fasteners_v, mAP_fasteners_i, total_ground_truths = evaluator.evaluate(threshold=0.5)
 
     print("~ mAP_buttons:", mAP_buttons)
-    print("~ mAP_fasteners: ", mAP_fasteners)
+    print("~ mAP_fasteners (visible): ", mAP_fasteners_v)
+    print("~ mAP_fasteners (invisible): ", mAP_fasteners_i)

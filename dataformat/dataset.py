@@ -6,22 +6,10 @@ import numpy as np
 from torch.utils.data import Dataset
 from typing import Callable
 from PIL import Image
-from abc import ABC, abstractmethod
-
-
-class Transform(ABC):
-    @abstractmethod
-    def __call__(self, image: Image.Image, annotations: Annotation):
-        raise NotImplemented
-
-
-class EmptyTransform(Transform):
-    def __call__(self, image: Image.Image, annotations: Annotation):
-        return image, annotations
 
 
 class PairDataset(Dataset):
-    def __init__(self, root: "DatasetConfig", annotations: list[Annotation], transform: Transform):
+    def __init__(self, root: "DatasetConfig", annotations: list[Annotation], transform: Callable | None = None):
         self.root = root
         self.annotations = annotations
         self.transform = transform
@@ -94,7 +82,7 @@ class DatasetConfig:
         """
         Checks if the dataset has a split cache.
         """
-        return (Path(self.dataset_root) / "dataset.cache").exists()
+        return Path(self.dataset_root / "dataset.cache").exists()
     
     def _create_split_cache(self):
         """
@@ -163,23 +151,23 @@ class DatasetConfig:
 
     @property
     def train_annotations(self) -> list[Annotation]:
-        if not self._has_split_cache():
-            raise ValueError("Dataset not loaded. Call `load()` first.")
+        if not hasattr(self, "_train_annotations"):
+            raise ValueError("Dataset not loaded. Call `check_dataset()` first.")
         return self._train_annotations
 
     @property
     def validation_annotations(self) -> list[Annotation]:
-        if not self._has_split_cache():
-            raise ValueError("Dataset not loaded. Call `load()` first.")
+        if not hasattr(self, "_validation_annotations"):
+            raise ValueError("Dataset not loaded. Call `check_dataset()` first.")
         return self._validation_annotations
 
     @property
     def test_annotations(self) -> list[Annotation]:
-        if not self._has_split_cache():
-            raise ValueError("Dataset not loaded. Call `load()` first.")
+        if not hasattr(self, "_test_annotations"):
+            raise ValueError("Dataset not loaded. Call `check_dataset()` first.")
         return self._test_annotations
 
-    def load(self):
+    def check_dataset(self):
         """
         Checks if the dataset has a split cache, and creates one if it doesn't exist.
         """
@@ -187,15 +175,12 @@ class DatasetConfig:
             print("No split cache found. Creating one...")
             self._create_split_cache()
             print("Split cache created.")
-        # now load the dataset
-        self._load_dataset()
-        return self
 
     def to_torch_dataset(self):
         """
         Returns the training, validation and test dataset as torch `Dataset` objects.
         """
-        train_dataset = PairDataset(self, self.train_annotations, transform=EmptyTransform())
-        val_dataset = PairDataset(self, self.validation_annotations, transform=EmptyTransform())
-        test_dataset = PairDataset(self, self.test_annotations, transform=EmptyTransform())
+        train_dataset = PairDataset(self, self.train_annotations)
+        val_dataset = PairDataset(self, self.validation_annotations)
+        test_dataset = PairDataset(self, self.test_annotations)
         return train_dataset, val_dataset, test_dataset

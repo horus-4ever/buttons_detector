@@ -13,11 +13,11 @@ class BoundingBox:
     w: float
     h: float
 
-    def to_tensor(self, device = None):
+    def to_tensor(self):
         """
-        Return the bounding box as a torch tensor (cx, cy, w, h).
+        Return the bounding box as a torch tensor.
         """
-        return torch.tensor([self.cx, self.cy, self.w, self.h], dtype=torch.float, device=device)
+        return torch.tensor([self.cx, self.cy, self.w, self.h], dtype=torch.float)
 
     def to_json(self):
         return {
@@ -36,6 +36,17 @@ class BoundingBox:
             h=json_data["h"]
         )
     
+    @classmethod
+    def from_x1y1x2y2(cls, x1: float, y1: float, x2: float, y2: float) -> "BoundingBox":
+        """
+        Creates a normalized bounding box from corner coordinates.
+        """
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
+        return cls(cx, cy, width, height)
+    
     def to_x1y1x2y2(self) -> tuple[float, float, float, float]:
         """
         Converts the bounding box from center coordinates to corner coordinates.
@@ -47,9 +58,6 @@ class BoundingBox:
         y2 = self.cy + self.h / 2
         return (x1, y1, x2, y2)
 
-    def to_cxcywh(self) -> tuple[float, float, float, float]:
-        return (self.cx, self.cy, self.w, self.h)
-
 
 @dataclass
 class Button:
@@ -59,11 +67,11 @@ class Button:
     bbox: BoundingBox
     visible: bool
 
-    def to_tensor(self, device = None):
+    def to_tensor(self):
         """
         Return the bbox as a torch tensor.
         """
-        return self.bbox.to_tensor(device=device)
+        return self.bbox.to_tensor()
 
     def to_json(self):
         return {
@@ -89,11 +97,11 @@ class Fastener:
     visible: bool
     type: str
 
-    def to_tensor(self, device = None):
+    def to_tensor(self):
         """
         Return the bbox as a torch tensor.
         """
-        return self.bbox.to_tensor(device=device)
+        return self.bbox.to_tensor()
 
     def to_json(self):
         return {
@@ -192,24 +200,18 @@ class Annotation:
     image: ImageInfo
     cloth: Cloth
 
-    def to_tensor(self, device = None):
+    def to_tensor(self):
         """
         Returns the annotations for the image a a tensor.
         The image is not returned.
-        - returns:
-            . labels_button: [n_buttons, 4]
-            . labels_fastener: [n_buttons, 4]
-            . classes: [n_buttons]
+        - returns: [n_buttons, 4]
         """
         pairs = self.cloth.pairs
-        if pairs:
-            labels_button = torch.stack([label.button.to_tensor(device=device) for label in pairs])
-            labels_fastener = torch.stack([label.fastener.to_tensor(device=device) for label in pairs])
-        else:
-            labels_button = torch.tensor([], device=device)
-            labels_fastener = torch.tensor([], device=device)
-        classes = torch.zeros(labels_button.size()[0], dtype=torch.long, device=device)
-        return classes, labels_button, labels_fastener
+        labels_button = torch.stack([label.button.to_tensor() for label in pairs])
+        labels_fastener = torch.stack([label.fastener.to_tensor() for label in pairs])
+        visibility_fastener = torch.tensor([label.fastener.visible for label in pairs], dtype=torch.float)
+        visibility_button = torch.tensor([label.button.visible for label in pairs], dtype=torch.float)
+        return labels_button, labels_fastener, visibility_button, visibility_fastener
 
     def to_json(self):
         return {
