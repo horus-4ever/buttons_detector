@@ -58,7 +58,7 @@ class CVATParser:
     
     def _parse_button(self, button: xml.Element) -> tuple[str, df.Button]:
         cvat_box = button
-        pair_id = button.find("attribute").text
+        pair_id = button.find("attribute[@name='pair_id']").text
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         button_bbox = self._parse_bbox(cvat_box)
@@ -66,11 +66,12 @@ class CVATParser:
     
     def _parse_fastener(self, fastener: xml.Element) -> tuple[str, df.Fastener]:
         cvat_box = fastener
-        pair_id = fastener.find("attribute").text
+        pair_id = fastener.find("attribute[@name='pair_id']").text
+        visibility = fastener.find("attribute[@name='visible']").text == "true"
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         bbox = self._parse_bbox(cvat_box)
-        return pair_id, df.Fastener(bbox, visible=True, type="fastener")
+        return pair_id, df.Fastener(bbox, visible=visibility, type="fastener")
     
     def _parse_pairs(self, image: xml.Element) -> list[df.Pair]:
         buttons = {}
@@ -150,9 +151,9 @@ def convert_cvat_xml_to_dataset(cvat_xml_path, output_dir, image_dir):
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser(description="Convert CVAT XML annotations to a dataset format.")
-    args.add_argument("--cvat_xml", type=str, required=True, help="Path to the CVAT XML annotation file.")
-    args.add_argument("--output_dir", type=str, required=True, help="Directory to save the converted dataset.")
-    args.add_argument("--image_dir", type=str, required=True, help="Directory containing the images referenced in the CVAT XML.")
+    args.add_argument("--cvat-xml", type=str, required=True, help="Path to the CVAT XML annotation file.")
+    args.add_argument("--output-dir", type=str, required=True, help="Directory to save the converted dataset.")
+    args.add_argument("--image-dir", type=str, required=True, help="Directory containing the images referenced in the CVAT XML.")
     args = args.parse_args()
 
     convert_cvat_xml_to_dataset(args.cvat_xml, args.output_dir, args.image_dir)

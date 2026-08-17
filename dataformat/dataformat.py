@@ -209,7 +209,9 @@ class Annotation:
         pairs = self.cloth.pairs
         labels_button = torch.stack([label.button.to_tensor() for label in pairs])
         labels_fastener = torch.stack([label.fastener.to_tensor() for label in pairs])
-        return labels_button, labels_fastener
+        visibility_fastener = torch.tensor([label.fastener.visible for label in pairs], dtype=torch.float)
+        visibility_button = torch.tensor([label.button.visible for label in pairs], dtype=torch.float)
+        return labels_button, labels_fastener, visibility_button, visibility_fastener
 
     def to_json(self):
         return {
