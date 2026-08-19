@@ -348,6 +348,14 @@ def parse_args():
     )
 
     parser.add_argument(
+        "-w",
+        "--weights",
+        type=str,
+        default="good_run_8.pt",
+        help="Model weights filename, looked up in CHECKPOINT_DIR.",
+    )
+
+    parser.add_argument(
         "-i",
         "--input",
         type=str,
@@ -393,8 +401,8 @@ def parse_args():
 def main():
     args = parse_args()
 
-    model_config_path = CHECKPOINT_DIR / f"{args.model}.json"
-    model_weights_path = CHECKPOINT_DIR / f"{args.model}.pt"
+    model_config_path = Path(f"{args.model}")
+    model_weights_path = Path(f"{args.weights}")
 
     #model_config_path = Path("model.json")
     #model_weights_path = Path("checkpoints/best.pt")
