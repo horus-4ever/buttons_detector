@@ -179,16 +179,53 @@ class Evaluator:
         occluded_tp = int((gt_matched & (~gt_visible)).sum().item())
         return visible_tp, occluded_tp, visible_total, occluded_total
 
-    def fastener_distance_error(self, pred_boxes, pred_scores, gt_boxes, width, height):
+    def fastener_distance_error(self, pred_b_boxes, pred_f_boxes, pred_scores, gt_b_boxes, gt_f_boxes, width, height, iou_threshold=0.5):
         """
-        pred_boxes: [M, 4], we assume we pass only the fastener boxes
+        pred_b_boxes: [M, 4]
+        pred_f_boxes: [M, 4]
         pred_scores: [M]
-        gt_boxes: [N, 4]
+        gt_b_boxes: [N, 4]
+        gt_f_boxes: [N, 4]
         """
+        # keep only the predictions whose confidence is above the threshold
+        keep = pred_scores >= self.threshold
+        pred_b_boxes = pred_b_boxes[keep]
+        pred_f_boxes = pred_f_boxes[keep]
+        pred_scores = pred_scores[keep]
+        # now sort and match in order
         order = pred_scores.argsort(descending=True)
-        gt_matched = torch.zeros(gt_boxes.shape[0], dtype=torch.bool)
+        gt_matched = torch.zeros(gt_b_boxes.shape[0], dtype=torch.bool)
         total_distance_error = 0.0
-        nb_matched = 1
+        nb_matched = 0
+        for i in order:
+            pred_box = pred_b_boxes[i]
+            pred_xyxy = box_convert(
+                pred_box,
+                in_fmt="cxcywh",
+                out_fmt="xyxy",
+            )
+            gt_xyxy = box_convert(
+                gt_b_boxes,
+                in_fmt="cxcywh",
+                out_fmt="xyxy",
+            )
+            ious = box_iou(pred_xyxy[None, :], gt_xyxy)[0] # [num_gt]
+            ious[gt_matched] = -1.0
+            best_iou, best_gt_index = ious.max(dim=0)
+            if best_iou >= iou_threshold:
+                gt_matched[best_gt_index] = True
+                # now we compute the distance error
+                gt_f_box = gt_f_boxes[best_gt_index]
+                pred_f_box = pred_f_boxes[i]
+                pred_center = pred_f_box[:2].clone()
+                pred_center[0] *= width
+                pred_center[1] *= height
+                gt_center = gt_f_box[:2].clone()
+                gt_center[0] *= width
+                gt_center[1] *= height
+                distance_error = torch.linalg.vector_norm(pred_center - gt_center, ord=2).item()
+                total_distance_error += distance_error
+                nb_matched += 1
         return total_distance_error, nb_matched
 
     def evaluate(self, threshold: float):
@@ -204,7 +241,7 @@ class Evaluator:
         total_normalized_distance_error = 0.0
         total_matched = 0
         for i, annotation in enumerate(val_dataset):
-            im_width, im_height = annotation.image.width, annotation.image.height
+            im_width, im_height = 512, 512
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
             pred_boxes = outputs["pred_boxes"].detach().cpu()[0] # [Q, RpQ, 4]
@@ -253,13 +290,16 @@ class Evaluator:
             occluded_total += new_occluded_total
             # now we compute the distance error for the fasteners
             distance_error, nb_matched = self.fastener_distance_error(
-                pred_boxes=pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
-                pred_scores=probs[predicted_classes == 0][:, 0],
-                gt_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                pred_b_boxes=pred_boxes[:, 0, :],
+                pred_f_boxes=pred_boxes[:, 1, :],
+                pred_scores=probs[:, 0],
+                gt_b_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                gt_f_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
                 width=im_width,
-                height=im_height
+                height=im_height,
+                iou_threshold=0.5
             )
-            image_size = math.sqrt(annotation.image.width ** 2 + annotation.image.height ** 2)
+            image_size = math.sqrt(im_width ** 2 + im_height ** 2)
             total_distance_error += distance_error
             total_normalized_distance_error += distance_error / image_size
             total_matched += nb_matched
