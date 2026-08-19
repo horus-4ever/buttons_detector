@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from torchvision import transforms
+from torchvision.ops import box_convert, box_iou
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from mpl_toolkits.axes_grid1 import ImageGrid
 from dataformat.dataformat import *
@@ -140,11 +141,78 @@ class Evaluator:
         outputs = self.model(images, masks)
         return outputs
 
+    def fastener_recall(self, pred_boxes, pred_scores, gt_boxes, gt_visible, iou_threshold=0.5):
+        """
+        pred_scores: [Q]
+        """
+        keep = pred_scores >= self.threshold
+        pred_boxes = pred_boxes[keep]
+        pred_scores = pred_scores[keep]
+        # get the number of ground truth
+        n_gt = gt_boxes.shape[0]
+        visible_total = int(gt_visible.sum().item())
+        occluded_total = int((~gt_visible).sum().item())
+        # compute the IoU
+        pred_xyxy = box_convert(
+            pred_boxes,
+            in_fmt="cxcywh",
+            out_fmt="xyxy",
+        )
+        gt_xyxy = box_convert(
+            gt_boxes,
+            in_fmt="cxcywh",
+            out_fmt="xyxy",
+        )
+        ious = box_iou(pred_xyxy, gt_xyxy) # [num_pred, num_gt]
+        order = pred_scores.argsort(descending=True) # [num_pred]
+        # define a tensor for the matched one, so that we don't reuse them
+        gt_matched = torch.zeros(n_gt, dtype=torch.bool)
+        # we loop for each predictions to match to a ground truth
+        for i in order: # we match in order of confidence, from the highest confidence
+            pred_ious = ious[i].clone() # [num_gt]
+            pred_ious[gt_matched] = -1.0
+            best_iou, best_gt_index = pred_ious.max(dim=0) # take the best iou and its index
+            if best_iou >= iou_threshold:
+                gt_matched[best_gt_index] = True
+        # now we want the visibility
+        visible_tp = int((gt_matched & gt_visible).sum().item())
+        occluded_tp = int((gt_matched & (~gt_visible)).sum().item())
+        return visible_tp, occluded_tp, visible_total, occluded_total
+
+    def fastener_distance_error(self, pred_boxes, pred_scores, gt_boxes):
+        """
+        pred_boxes: [M, 4], we assume we pass only the fastener boxes
+        pred_scores: [M]
+        gt_boxes: [N, 4]
+        """
+        order = pred_scores.argsort(descending=True)
+        gt_matched = torch.zeros(gt_boxes.shape[0], dtype=torch.bool)
+        total_distance_error = 0.0
+        for i in order:
+            pred_box = pred_boxes[i]
+            pred_center = pred_box[:2] # [cx, cy]
+            # compute the distance to all ground truth boxes
+            gt_centers = gt_boxes[:, :2] # [N, 2]
+            distances = torch.norm(gt_centers - pred_center, dim=1) # [N]
+            distances[gt_matched] = float("inf") # we don't want to match to already matched ground truths
+            best_distance, best_gt_index = distances.min(dim=0)
+            if best_distance < float("inf"):
+                gt_matched[best_gt_index] = True
+                total_distance_error += best_distance.item()
+        nb_matched = int(gt_matched.sum().item())
+        return total_distance_error, nb_matched
+
     def evaluate(self, threshold: float):
         val_dataset = dataset.validation_annotations
         mAP_buttons = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
-        mAP_fasteners_v = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
-        mAP_fasteners_i = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
+        mAP_fasteners = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
+        # and for the recall of visible and occluded fasteners
+        visible_tp = 0
+        visible_total = 0
+        occluded_tp = 0
+        occluded_total = 0
+        total_distance_error = 0.0
+        total_matched = 0
         for i, annotation in enumerate(val_dataset):
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
             outputs = self.run_one(annotation)
@@ -167,31 +235,44 @@ class Evaluator:
                     "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
                 }]
             )
-            mAP_fasteners_v.update(
+            mAP_fasteners.update(
                 [{
                     "boxes": pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
-                    "scores": probs[predicted_classes == 0][:, 1],
+                    "scores": probs[predicted_classes == 0][:, 0],
                     "labels": predicted_classes[predicted_classes == 0]
                 }],
                 [{
-                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs if pair.fastener.visible]),
-                    "labels": torch.tensor([0] * nb_visible_fasteners, dtype=torch.int64)
+                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                    "labels": torch.tensor([0] * len(annotation.cloth.pairs), dtype=torch.int64)
                 }]
             )
-            mAP_fasteners_i.update(
-                [{
-                    "boxes": pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
-                    "scores": probs[predicted_classes == 0][:, 1],
-                    "labels": predicted_classes[predicted_classes == 0]
-                }],
-                [{
-                    "boxes": torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs if not pair.fastener.visible]),
-                    "labels": torch.tensor([0] * nb_invisible_fasteners, dtype=torch.int64)
-                }]
+            # now we compute the recall for visible and occluded fasteners
+            new_visible_tp, new_occluded_tp, new_visible_total, new_occluded_total = self.fastener_recall(
+                pred_boxes=pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
+                pred_scores=probs[predicted_classes == 0][:, 0],
+                gt_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                gt_visible=torch.tensor([pair.fastener.visible for pair in annotation.cloth.pairs], dtype=torch.bool),
+                iou_threshold=0.5
             )
+            visible_tp += new_visible_tp
+            occluded_tp += new_occluded_tp
+            visible_total += new_visible_total
+            occluded_total += new_occluded_total
+            # now we compute the distance error for the fasteners
+            distance_error, nb_matched = self.fastener_distance_error(
+                pred_boxes=pred_boxes[predicted_classes == 0][:, 1, :], # only the pair boxes
+                pred_scores=probs[predicted_classes == 0][:, 0],
+                gt_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs])
+            )
+            image_size = math.sqrt(annotation.image.width ** 2 + annotation.image.height ** 2)
+            total_distance_error += distance_error / image_size # normalize by the diagonal of the image
+            total_matched += nb_matched
         print("Inference finished.")
         total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
-        return mAP_buttons.compute(), mAP_fasteners_v.compute(), mAP_fasteners_i.compute(), total_ground_truths
+        visibility_recall = visible_tp / visible_total if visible_total > 0 else 0.0
+        occlusion_recall = occluded_tp / occluded_total if occluded_total > 0 else 0.0
+        average_distance_error = total_distance_error / total_matched if total_matched > 0 else 0.0
+        return mAP_buttons.compute(), mAP_fasteners.compute(), visibility_recall, occlusion_recall, total_ground_truths, average_distance_error
 
         
 
@@ -225,8 +306,10 @@ if __name__ == "__main__":
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # now evaluate a dataset based on the dataset cache it has
     evaluator = Evaluator(model, dataset, threshold, device)
-    mAP_buttons, mAP_fasteners_v, mAP_fasteners_i, total_ground_truths = evaluator.evaluate(threshold=0.5)
+    mAP_buttons, mAP_fasteners, visibility_recall, occlusion_recall, total_ground_truths, average_distance_error = evaluator.evaluate(threshold=0.5)
 
     print("~ mAP_buttons:", mAP_buttons)
-    print("~ mAP_fasteners (visible): ", mAP_fasteners_v)
-    print("~ mAP_fasteners (invisible): ", mAP_fasteners_i)
+    print("~ mAP_fasteners: ", mAP_fasteners)
+    print("~ Visibility Recall: ", visibility_recall)
+    print("~ Occlusion Recall: ", occlusion_recall)
+    print("~ Average Distance Error: ", average_distance_error)
