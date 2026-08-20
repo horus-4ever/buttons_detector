@@ -14,7 +14,6 @@ class DeformableTransformer(nn.Module):
             nheads: int,
             nlevels: int,
             npoints: int,
-            nrefpointsperquery: int,
             encoder_nlayers: int,
             decoder_nlayers: int,
             dim_ffn: int,
@@ -39,7 +38,6 @@ class DeformableTransformer(nn.Module):
             nheads=nheads,
             nlevels=nlevels,
             npoints=npoints,
-            nrefpointsperquery=nrefpointsperquery,
             nlayers=decoder_nlayers,
             dim_ffn=dim_ffn,
             dropout=dropout,
@@ -52,11 +50,10 @@ class DeformableTransformer(nn.Module):
         # reference points in the decoder are learned from linear projection from object queries
         self.proj_reference_points = nn.Linear(d_model, 2)
 
-    def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
+    def forward(self, features, query_embed, pos_embeds, masks):
         """
         - features: num_levels * [B, embed_dim, Hl, Wl]
         - query_embed: [num_queries, embed_dim]
-        - refpoints_embed: [RpQ, embed_dim]
         - pos_embeds: num_levels * [B, embed_dim, Hl, Wl]
         - masks: num_levels * [B, 1, Hl, Wl]
         """
@@ -105,23 +102,16 @@ class DeformableTransformer(nn.Module):
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
         # now we get the reference points by linear projection
-        # [Q, C] -> [Q, 1, C]
-        query_tokens = query_embed[:, None, :]
-        # [RqP, C] -> [1, RqP, C]
-        role_tokens = refpoints_embed[None, :, :]
-        # [Q, RqP, C]
-        token_embed = query_tokens + role_tokens # we construct from both query and reference points embedings
-        # [Q, RqP, 2]
-        reference_points = self.proj_reference_points(token_embed).sigmoid()
+        # [Q, 2]
+        reference_points = self.proj_reference_points(query_embed).sigmoid()
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # [query_len, RpQ, 2]
+            reference_points=reference_points, # [query_len, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query_embed=query_embed, # [num_queries, embed_dim]
-            refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
-        # decoder_attn_weights: decoder_layers * [batch, query_len * RqP, heads, num_levels, num_points]
-        # result: [B, Q, RpQ, embed_dim]
+        # decoder_attn_weights: decoder_layers * [batch, query_len, heads, num_levels, num_points]
+        # result: [B, Q, embed_dim]
         return result, encoder_attention_weights, decoder_attn_maps, spatial_shapes, encoder_sampling_locations, decoder_sampling_locations, reference_points

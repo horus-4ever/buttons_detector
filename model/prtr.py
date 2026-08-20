@@ -21,7 +21,6 @@ class PRTR(nn.Module):
             n_encoder_layers: int = 3,
             n_decoder_layers: int = 1,
             n_points: int = 4,
-            nrefpointsperquery: int = 2,
             dim_ffn: int = 512,
             dropout: float = 0.1,
             activation: str = "relu",
@@ -45,7 +44,6 @@ class PRTR(nn.Module):
             nheads=n_heads,
             nlevels=4,
             npoints=n_points,
-            nrefpointsperquery=nrefpointsperquery,
             encoder_nlayers=n_encoder_layers,
             decoder_nlayers=n_decoder_layers,
             dim_ffn=dim_ffn,
@@ -53,13 +51,10 @@ class PRTR(nn.Module):
             activation=activation
         )
         self.query_embed = nn.Embedding(num_queries, self.d_model)
-        # NEW: The reference point embedding is there to encode the difference between a button and a hole.
-        #      It is applied to all reference points on top of the query_embed, which encodes the pair information.
-        self.refpoints_embed = nn.Embedding(nrefpointsperquery, self.d_model)
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
+        self.button_head = MLP(self.d_model, mlp_hidden_dim, 8, mlp_num_layers)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -119,34 +114,35 @@ class PRTR(nn.Module):
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
             query_embed=self.query_embed.weight, # [num_queries, embed_dim]
-            refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
-        # reference_points: [num_queries, RpQ, 4]
+        # reference_points: [num_queries, 4]
         Q, num_ref_points_per_query, _ = reference_points.size()
-        # NEW: the button head now predicts the bounding box
         # -> [B, Q, embed_dim]
-        class_head_input = hs.mean(dim=2) # take the mean over RpQ
-        pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
-        # for the buttons we of course need to keep by RpQ
-        # [B, query_len, RpQ, 4]
-        button_deltas = self.button_head(hs) # [B, Q, RpQ, 4]
+        pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
+        # [B, query_len, 8]
+        button_deltas = self.button_head(hs) # [B, Q, 8]
         # take the button centers, which are the first two coordinates
-        button_centers = button_deltas[..., :2] # [B, Q, RpQ, 2]
-        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, Q, RpQ, 2]
+        button_centers = button_deltas[..., :2] # [B, Q, 2]
+        fastener_centers = button_deltas[..., 4:6] # [B, Q, 2]
+        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, Q, 2]
+        pred_fastener_centers = (inverse_sigmoid(reference_points) + fastener_centers).sigmoid()  # [B, Q, 2]
         # now the width and height is given by the last two coordinates
-        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
-        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, Q, RpQ, 4]
+        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, Q, 2]
+        pred_fastener_wh = button_deltas[..., 6:].sigmoid()  # [B, Q, 2]
+        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh, pred_fastener_centers, pred_fastener_wh], dim=-1)  # [B, Q, 8]
+        # [B, Q, 8] -> [B, Q, 2, 4]
+        pred_boxes = pred_boxes.view(B, Q, 2, 4)
 
         return {
             "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
-            "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
+            "pred_boxes": pred_boxes, # [B, Q, 2, 4]
             "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
             "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
-            "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
+            "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries, heads, num_levels, num_points]
             "decoder_sampling_locations": decoder_sampling_locations, # [batch, num_queries, heads, num_levels, num_points, 2]
             "spatial_shapes": spatial_shapes, # [num_levels, 2]
-            "reference_points": reference_points, # [query_len, RpQ, 2]
+            "reference_points": reference_points, # [query_len, 2]
             "image_size": (H, W)
         }
 
@@ -164,7 +160,6 @@ def build_model(model_config: ModelConfig):
         n_encoder_layers=model_params.n_encoder_layers,
         n_decoder_layers=model_params.n_decoder_layers,
         n_points=model_params.n_points,
-        nrefpointsperquery=2,
         dim_ffn=model_params.dim_ffn,
         dropout=model_params.dropout,
         activation=model_params.activation,
