@@ -228,6 +228,104 @@ class Evaluator:
                 nb_matched += 1
         return total_distance_error, nb_matched
 
+    def pair_recall_precision(self, pred_b_boxes, pred_f_boxes, pred_scores, gt_b_boxes, gt_f_boxes, iou_threshold=0.5):
+        """
+        pred_b_boxes: [M, 4]
+        pred_f_boxes: [M, 4]
+        pred_scores: [M]
+        gt_b_boxes: [N, 4]
+        gt_f_boxes: [N, 4]
+        """
+        # keep only the predictions whose confidence is above the threshold
+        keep = pred_scores >= self.threshold
+        pred_b_boxes = pred_b_boxes[keep]
+        pred_f_boxes = pred_f_boxes[keep]
+        pred_scores = pred_scores[keep]
+        # now sort and match in order
+        order = pred_scores.argsort(descending=True)
+        gt_matched = torch.zeros(gt_b_boxes.shape[0], dtype=torch.bool)
+        nb_matched = 0
+        for i in order:
+            pred_button = pred_b_boxes[i]
+            pred_fastener = pred_f_boxes[i]
+            pred_button_xyxy = box_convert(
+                pred_button,
+                in_fmt="cxcywh",
+                out_fmt="xyxy",
+            )
+            pred_fastener_xyxy = box_convert(
+                pred_fastener,
+                in_fmt="cxcywh",
+                out_fmt="xyxy",
+            )
+            gt_button_xyxy = box_convert(
+                gt_b_boxes,
+                in_fmt="cxcywh",
+                out_fmt="xyxy",
+            )
+            gt_fastener_xyxy = box_convert(
+                gt_f_boxes,
+                in_fmt="cxcywh",
+                out_fmt="xyxy",
+            )
+            ious_button = box_iou(pred_button_xyxy[None, :], gt_button_xyxy)[0] # [num_gt]
+            ious_fastener = box_iou(pred_fastener_xyxy[None, :], gt_fastener_xyxy)[0] # [num_gt]
+            ious_button[gt_matched] = -1.0
+            ious_fastener[gt_matched] = -1.0
+            keep = (ious_button >= iou_threshold) & (ious_fastener >= iou_threshold)
+            if not keep.any():
+                continue
+            kept_together = torch.min(ious_button, ious_fastener)
+            kept_together[~keep] = -1.0
+            _, best_gt_index = kept_together.max(dim=0)
+            gt_matched[best_gt_index] = True
+            nb_matched += 1
+        return nb_matched, len(pred_scores), len(gt_b_boxes)
+
+    def pair_distance_recall_precision(self, pred_b_boxes, pred_f_boxes, pred_scores, gt_b_boxes, gt_f_boxes, width, height, distance_threshold=5):
+        """
+        pred_b_boxes: [M, 4]
+        pred_f_boxes: [M, 4]
+        pred_scores: [M]
+        gt_b_boxes: [N, 4]
+        gt_f_boxes: [N, 4]
+        distance_threshold: the distance threshold in pixels to consider a pair as matched
+        """
+        # keep only the predictions whose confidence is above the threshold
+        keep = pred_scores >= self.threshold
+        pred_b_boxes = pred_b_boxes[keep]
+        pred_f_boxes = pred_f_boxes[keep]
+        pred_scores = pred_scores[keep]
+        scale = torch.tensor(
+            [width, height],
+            device=pred_b_boxes.device,
+            dtype=pred_b_boxes.dtype,
+        )
+        pred_b_centers = pred_b_boxes[:, :2] * scale
+        pred_f_centers = pred_f_boxes[:, :2] * scale
+        gt_b_centers = gt_b_boxes[:, :2] * scale
+        gt_f_centers = gt_f_boxes[:, :2] * scale
+        # now sort and match in order
+        order = pred_scores.argsort(descending=True)
+        gt_matched = torch.zeros(gt_b_boxes.shape[0], dtype=torch.bool)
+        nb_matched = 0
+        for i in order:
+            pred_button = pred_b_centers[i]
+            pred_fastener = pred_f_centers[i]
+            distance_button = torch.linalg.vector_norm(pred_button[None, :2] - gt_b_centers, dim=1) # [num_gt]
+            distance_fastener = torch.linalg.vector_norm(pred_fastener[None, :2] - gt_f_centers, dim=1) # [num_gt]
+            distance_button[gt_matched] = math.inf
+            distance_fastener[gt_matched] = math.inf
+            keep = (distance_button <= distance_threshold) & (distance_fastener <= distance_threshold)
+            if not keep.any():
+                continue
+            kept_together = torch.max(distance_button, distance_fastener)
+            kept_together[~keep] = math.inf
+            _, best_gt_index = kept_together.min(dim=0)
+            gt_matched[best_gt_index] = True
+            nb_matched += 1
+        return nb_matched, len(pred_scores), len(gt_b_boxes)
+
     def evaluate(self, threshold: float):
         val_dataset = dataset.validation_annotations
         mAP_buttons = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
@@ -240,6 +338,12 @@ class Evaluator:
         total_distance_error = 0.0
         total_normalized_distance_error = 0.0
         total_matched = 0
+        total_pair_predictions = 0
+        total_pair_groundtruth = 0
+        total_pair_matched = 0
+        total_pair_distance_predictions = 0
+        total_pair_distance_groundtruth = 0
+        total_pair_distance_matched = 0
         for i, annotation in enumerate(val_dataset):
             im_width, im_height = 512, 512
             print(f"Image [{i} / {len(val_dataset)}]", end="\r")
@@ -293,7 +397,7 @@ class Evaluator:
                 pred_b_boxes=pred_boxes[:, 0, :],
                 pred_f_boxes=pred_boxes[:, 1, :],
                 pred_scores=probs[:, 0],
-                gt_b_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                gt_b_boxes=torch.stack([pair.button.bbox.to_tensor() for pair in annotation.cloth.pairs]),
                 gt_f_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
                 width=im_width,
                 height=im_height,
@@ -303,15 +407,47 @@ class Evaluator:
             total_distance_error += distance_error
             total_normalized_distance_error += distance_error / image_size
             total_matched += nb_matched
+            # now the pair precision
+            nb_pair_matched, nb_pair_predictions, nb_pair_groundtruth = self.pair_recall_precision(
+                pred_b_boxes=pred_boxes[:, 0, :],
+                pred_f_boxes=pred_boxes[:, 1, :],
+                pred_scores=probs[:, 0],
+                gt_b_boxes=torch.stack([pair.button.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                gt_f_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                iou_threshold=0.5
+            )
+            total_pair_matched += nb_pair_matched
+            total_pair_predictions += nb_pair_predictions
+            total_pair_groundtruth += nb_pair_groundtruth
+            # now the pair distance precision
+            nb_pair_distance_matched, nb_pair_distance_predictions, nb_pair_distance_groundtruth = self.pair_distance_recall_precision(
+                pred_b_boxes=pred_boxes[:, 0, :],
+                pred_f_boxes=pred_boxes[:, 1, :],
+                pred_scores=probs[:, 0],
+                gt_b_boxes=torch.stack([pair.button.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                gt_f_boxes=torch.stack([pair.fastener.bbox.to_tensor() for pair in annotation.cloth.pairs]),
+                width=im_width,
+                height=im_height,
+                distance_threshold=5
+            )
+            total_pair_distance_matched += nb_pair_distance_matched
+            total_pair_distance_predictions += nb_pair_distance_predictions
+            total_pair_distance_groundtruth += nb_pair_distance_groundtruth
         print("Inference finished.")
         total_ground_truths = sum(len(annotation.cloth.pairs) for annotation in val_dataset)
         visibility_recall = visible_tp / visible_total if visible_total > 0 else 0.0
         occlusion_recall = occluded_tp / occluded_total if occluded_total > 0 else 0.0
         average_distance_error = total_distance_error / total_matched if total_matched > 0 else 0.0
         average_normalized_distance_error = total_normalized_distance_error / total_matched if total_matched > 0 else 0.0
+        pair_precision = total_pair_matched / total_pair_predictions if total_pair_predictions > 0 else 0.0
+        pair_recall = total_pair_matched / total_pair_groundtruth if total_pair_groundtruth > 0 else 0.0
+        pair_distance_precision = total_pair_distance_matched / total_pair_distance_predictions if total_pair_distance_predictions > 0 else 0.0
+        pair_distance_recall = total_pair_distance_matched / total_pair_distance_groundtruth if total_pair_distance_groundtruth > 0 else 0.0
         return (mAP_buttons.compute(), mAP_fasteners.compute(),
                 visibility_recall, occlusion_recall, total_ground_truths,
-                average_distance_error, average_normalized_distance_error
+                average_distance_error, average_normalized_distance_error,
+                pair_precision, pair_recall,
+                pair_distance_precision, pair_distance_recall
         )
 
         
@@ -346,7 +482,7 @@ if __name__ == "__main__":
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # now evaluate a dataset based on the dataset cache it has
     evaluator = Evaluator(model, dataset, threshold, device)
-    mAP_buttons, mAP_fasteners, visibility_recall, occlusion_recall, total_ground_truths, average_distance_error, average_normalized_distance_error = evaluator.evaluate(threshold=0.5)
+    mAP_buttons, mAP_fasteners, visibility_recall, occlusion_recall, total_ground_truths, average_distance_error, average_normalized_distance_error, pair_precision, pair_recall, pair_distance_precision, pair_distance_recall = evaluator.evaluate(threshold=0.5)
 
     print("~ mAP_buttons:", mAP_buttons)
     print("~ mAP_fasteners: ", mAP_fasteners)
@@ -354,3 +490,7 @@ if __name__ == "__main__":
     print("~ Occlusion Recall: ", occlusion_recall)
     print("~ Average Distance Error: ", average_distance_error)
     print("~ Average Normalized Distance Error: ", average_normalized_distance_error)
+    print("~ Pair Precision@50: ", pair_precision)
+    print("~ Pair Recall@50: ", pair_recall)
+    print("~ Pair Distance Precision@5: ", pair_distance_precision)
+    print("~ Pair Distance Recall@5: ", pair_distance_recall)
