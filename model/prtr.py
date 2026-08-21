@@ -117,7 +117,7 @@ class PRTR(nn.Module):
         )
         # hs: [B, query_len, embed_dim]
         # reference_points: [num_queries, 4]
-        Q, num_ref_points_per_query, _ = reference_points.size()
+        Q, _ = reference_points.size()
         # -> [B, Q, embed_dim]
         pred_logits = self.class_head(hs) # [B, num_queries, num_classes+1]
         # [B, query_len, 8]
@@ -128,7 +128,7 @@ class PRTR(nn.Module):
         pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, Q, 2]
         pred_fastener_centers = (inverse_sigmoid(reference_points) + fastener_centers).sigmoid()  # [B, Q, 2]
         # now the width and height is given by the last two coordinates
-        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, Q, 2]
+        pred_buttons_wh = button_deltas[..., 2:4].sigmoid()  # [B, Q, 2]
         pred_fastener_wh = button_deltas[..., 6:].sigmoid()  # [B, Q, 2]
         pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh, pred_fastener_centers, pred_fastener_wh], dim=-1)  # [B, Q, 8]
         # [B, Q, 8] -> [B, Q, 2, 4]

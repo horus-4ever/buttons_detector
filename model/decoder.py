@@ -34,7 +34,7 @@ class Decoder(nn.Module):
         # normalization layer
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, input, memory, reference_points, spatial_shapes, query_embed: Optional[Tensor], refpoints_embed, memory_key_padding_mask: Optional[Tensor] = None):
+    def forward(self, input, memory, reference_points, spatial_shapes, query_embed: Optional[Tensor], memory_key_padding_mask: Optional[Tensor] = None):
         """
         - input: [B, num_queries, embed_dim]
         - memory: [B, sum_l(Hl * Wl), embed_dim]
@@ -48,7 +48,7 @@ class Decoder(nn.Module):
         decoder_sampling_locations = []
         # loop over the decoder layers
         B, Q, C = input.size()
-        output = input[:, :, None, :].expand(B, Q, self.num_ref_points_per_query, C).contiguous()
+        output = input
         for layer in self.layers:
             output, attn_weights, sampling_locations = layer(
                 input=output,
@@ -163,5 +163,4 @@ class DecoderLayer(nn.Module):
         # add and normalize
         result = add_norm_out + ffn_out
         result = self.norm3(result) # [B, Q, embed_dim]
-        result = result.view(B, Q, self.num_ref_points_per_query, C)
         return result, memory_attention_weights, memory_attention_sampling_locations
