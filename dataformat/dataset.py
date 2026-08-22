@@ -65,7 +65,7 @@ class DatasetConfig:
             "dataset_root": self.dataset_root,
             "images_dir": self.images_dir,
             "annotations_dir": self.annotations_dir,
-            "data_split": self.data_split
+            "data_split": self.data_split.to_json()
         }
 
     @classmethod

@@ -13,10 +13,11 @@ class HungarianMatcher(nn.Module):
     Cost = classification cost + coordinate L1 cost
     """
 
-    def __init__(self, cost_class: float = 1.0, cost_coord: float = 5.0):
+    def __init__(self, cost_class: float = 1.0, cost_coord: float = 5.0, cost_giou: float = 1.0):
         super().__init__()
         self.cost_class = cost_class
         self.cost_coord = cost_coord
+        self.cost_giou = cost_giou
 
         if cost_class == 0 and cost_coord == 0:
             raise ValueError("All costs cannot be 0")
@@ -84,7 +85,7 @@ class HungarianMatcher(nn.Module):
             ) # [Q, N]
             cost_giou = -(giou_buttons + giou_holes)
             # total cost
-            C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole) + cost_giou
+            C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole) + self.cost_giou * cost_giou
             C = C.cpu()
 
             pred_ind, tgt_ind = linear_sum_assignment(C)

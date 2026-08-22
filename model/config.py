@@ -17,6 +17,21 @@ class ModelParameters:
     mlp_hidden_dim: int
     mlp_num_layers: int
 
+    def to_json(self):
+        return {
+            "num_queries": self.num_queries,
+            "d_model": self.d_model,
+            "n_heads": self.n_heads,
+            "n_encoder_layers": self.n_encoder_layers,
+            "n_decoder_layers": self.n_decoder_layers,
+            "n_points": self.n_points,
+            "dim_ffn": self.dim_ffn,
+            "dropout": self.dropout,
+            "activation": self.activation,
+            "mlp_hidden_dim": self.mlp_hidden_dim,
+            "mlp_num_layers": self.mlp_num_layers
+        }
+
     @classmethod
     def from_json(cls, data):
         return cls(
@@ -46,6 +61,20 @@ class TrainingParameters:
     cost_class: float
     cost_coord: float
     cost_giou: float
+
+    def to_json(self):
+        return {
+            "dataset": self.dataset,
+            "batch_size": self.batch_size,
+            "num_epochs": self.num_epochs,
+            "lr": self.lr,
+            "weight_decay": self.weight_decay,
+            "num_workers": self.num_workers,
+            "seed": self.seed,
+            "cost_class": self.cost_class,
+            "cost_coord": self.cost_coord,
+            "cost_giou": self.cost_giou
+        }
 
     @classmethod
     def from_json(cls, data):
@@ -80,6 +109,15 @@ class ModelConfig:
     model_parameters: ModelParameters
     training_parameters: TrainingParameters
     finetune_parameters: FinetuneParameters
+
+    def to_json(self, finetune: bool = False):
+        return {
+            "name": self.name,
+            "model_parameters": self.model_parameters.to_json(),
+            "finetune": finetune,
+            "training_parameters": self.training_parameters.to_json(),
+            "finetune_parameters": self.finetune_parameters.to_json()
+        }
 
     @classmethod
     def from_json(cls, data):

@@ -27,7 +27,7 @@ def seed_worker(worker_id: int):
 
 
 class Trainer:
-    def __init__(self, model, criterion, optimizer, scheduler, device, dataloader, val_dataloader):
+    def __init__(self, model, criterion, optimizer, scheduler, device, dataloader, val_dataloader, configuration):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
@@ -35,6 +35,7 @@ class Trainer:
         self.device = device
         self.val_dataloader = val_dataloader
         self.dataloader = dataloader
+        self.configuration = configuration
         self.epoch = 0
         self.best_val_loss = float("inf")
         self.last_was_best = False
@@ -51,7 +52,7 @@ class Trainer:
     def _annotations_to_tensor(self, annotations: list[Annotation], device):
         targets = []
         for annotation in annotations:
-            classes, coord_buttons, coord_fasteners = annotation.to_tensor(device=device)
+            classes, coord_buttons, coord_fasteners, *_ = annotation.to_tensor(device=device)
             targets.append({
                 "labels": classes,
                 "buttons": coord_buttons,
@@ -145,6 +146,7 @@ class Trainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),
                 "val_loss": self.best_val_loss,
+                "hyperparameters": self.configuration
             },
             save_path,
         )
@@ -167,7 +169,10 @@ def load_weights(model, weights: Path, device):
     if not weights.exists():
         raise FileNotFoundError(f"Checkpoint not found: {weights}")
     checkpoint = torch.load(weights, map_location=device)
-    model.load_state_dict(checkpoint)
+    if "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        model.load_state_dict(checkpoint)
 
 
 def freeze_backbone(model):
@@ -188,9 +193,14 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     dataset_config = DatasetConfig.open(parameters.dataset)
     dataset_config.load() # builds cache
     train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
-    sizes = (512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864)
+    sizes = (512,)
     train_dataset.transform = TrainingTransform(sizes)
     val_dataset.transform = ValidationTransform(512)
+
+    configuration = {
+        "MODEL_CONFIG": model_config.to_json(finetune=finetune),
+        "DATASET_CONFIG": dataset_config.to_json(),
+    }
 
     # create the data loaders
     loader_generator = torch.Generator()
@@ -234,6 +244,7 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     matcher = HungarianMatcher(
         cost_class=parameters.cost_class,
         cost_coord=parameters.cost_coord,
+        cost_giou=parameters.cost_giou
     )
 
     criterion = SetCriterion(
@@ -267,6 +278,7 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         device=device,
         dataloader=train_loader,
         val_dataloader=val_loader,
+        configuration=configuration
     )
     return trainer
 
