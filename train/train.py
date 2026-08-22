@@ -51,7 +51,7 @@ class Trainer:
     def _annotations_to_tensor(self, annotations: list[Annotation], device):
         targets = []
         for annotation in annotations:
-            classes, coord_buttons, coord_fasteners = annotation.to_tensor(device=device)
+            classes, coord_buttons, coord_fasteners, *_ = annotation.to_tensor(device=device)
             targets.append({
                 "labels": classes,
                 "buttons": coord_buttons,
@@ -167,7 +167,10 @@ def load_weights(model, weights: Path, device):
     if not weights.exists():
         raise FileNotFoundError(f"Checkpoint not found: {weights}")
     checkpoint = torch.load(weights, map_location=device)
-    model.load_state_dict(checkpoint)
+    if "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        model.load_state_dict(checkpoint)
 
 
 def freeze_backbone(model):
@@ -188,7 +191,7 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     dataset_config = DatasetConfig.open(parameters.dataset)
     dataset_config.load() # builds cache
     train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
-    sizes = (512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864)
+    sizes = (512,)
     train_dataset.transform = TrainingTransform(sizes)
     val_dataset.transform = ValidationTransform(512)
 
