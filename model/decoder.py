@@ -116,6 +116,7 @@ class DecoderLayer(nn.Module):
     
     def with_queries_embed(self, tensor, query_embed: Tensor, refpoints_embed: Tensor):
         """
+        NOTE: For the ablation study, we don't use this method.
         - tensor: [..., num_queries * RqP, embed_dim]
         - query_embed: [num_queries, embed_dim]
         - refpoints_embed: [RqP, embed_dim]
@@ -149,7 +150,7 @@ class DecoderLayer(nn.Module):
         input = input.view(B, Q * RQP, C)
         # computes k and q for queries attention
         # [B, RpQ * num_queries, embed_dim]
-        k_queries = q_queries = self.with_queries_embed(input, query_embed, refpoints_embed)
+        k_queries = q_queries = self.with_pos_embed(input, query_embed) # NOTE: Ablation: no role embedding for the refpoints
         v_queries = input
         # compute self-attention on queries and dropout
         queries_attention_out = self.queries_attention(
@@ -166,7 +167,7 @@ class DecoderLayer(nn.Module):
         # computes v, k and q for memory attention
         v_memory = memory # [B, query_len, embed_dim]
         # [B, num_queries * RqP, embed_dim]
-        q_memory = self.with_queries_embed(add_norm_out, query_embed, refpoints_embed)
+        q_memory = self.with_pos_embed(add_norm_out, query_embed) # NOTE: Ablation: no role embedding for the refpoints
         # resize the reference_points to the right size
         # [query_len, RpQ, 2] -> [query_len * RpQ, 2]
         reference_points = reference_points.view(Q * self.num_ref_points_per_query, 2)
