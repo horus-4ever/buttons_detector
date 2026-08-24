@@ -46,6 +46,24 @@ class PairDataset(Dataset):
             image, annotation = self.transform(image, annotation)
         return image, annotation
 
+    # =========================================================
+    # NOTE: ablation study: gradual number of real images
+    # =========================================================
+    def take_subset(self, fraction: float) -> "PairDataset":
+        """
+        Take only one subset of the dataset.
+        This method was added for the ablation study.
+        The random seed must be set for reproductibility.
+        """
+        root = self.root
+        transform = self.transform
+        # now we get the indices
+        n_data = len(self.annotations)
+        random_indices = torch.randperm(n_data) # WARNING: make sure that the random seed is set
+        keep_indices = random_indices[:int(n_data * fraction)]
+        annotations_subset = [self.annotations[i] for i in keep_indices]
+        return PairDataset(root, annotations_subset, transform)
+    # =========================================================
 
 @dataclass
 class DatasetConfig:

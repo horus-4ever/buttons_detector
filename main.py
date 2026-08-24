@@ -10,6 +10,11 @@ if __name__ == "__main__":
     parser.add_argument("--finetune", type=bool, default=False)
     parser.add_argument("--model", type=str, default="model.json")
     parser.add_argument("--save-weights", type=str, default="checkpoints")
+    # =========================================================
+    # NOTE: ablation study: gradual number of real images
+    # =========================================================
+    parser.add_argument("--fraction", type=float, required=True)
+    # =========================================================
     args = parser.parse_args()
     # get the model configuration
     config_path = Path(args.model)
@@ -19,5 +24,10 @@ if __name__ == "__main__":
         model_config,
         resume_path=args.resume,
         save_weights_folder=args.save_weights,
-        finetune=args.finetune
+        finetune=args.finetune,
+        # =========================================================
+        # NOTE: ablation study: gradual number of real images
+        # =========================================================
+        dataset_fraction=args.fraction
+        # =========================================================
     )

@@ -12,7 +12,7 @@ from model.prtr import PRTR, build_model
 from model.criterion import HungarianMatcher, SetCriterion
 from model.config import ModelConfig
 from model.utils import load_weights
-from dataformat.dataset import DatasetConfig, Annotation
+from dataformat.dataset import DatasetConfig, Annotation, PairDataset
 from train.transforms import TrainingTransform, ValidationTransform
 from .commons import collate_fn
 
@@ -180,7 +180,8 @@ def freeze_backbone(model):
         p.requires_grad = False
     model.backbone.eval()
 
-def init_trainer(model_config: ModelConfig, finetune: bool):
+# NOTE: added argument `dataset_fraction` for the ablation study
+def init_trainer(model_config: ModelConfig, finetune: bool, dataset_fraction: float):
     parameters = model_config.training_parameters if not finetune else model_config.finetune_parameters
     model_params = model_config.model_parameters
     # get the device
@@ -196,6 +197,11 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     sizes = (512,)
     train_dataset.transform = TrainingTransform(sizes)
     val_dataset.transform = ValidationTransform(512)
+    # =========================================================
+    # NOTE: ablation study: gradual number of real images
+    # =========================================================
+    train_dataset = train_dataset.take_subset(dataset_fraction)
+    # =========================================================
 
     configuration = {
         "MODEL_CONFIG": model_config.to_json(finetune=finetune),
@@ -283,11 +289,12 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     return trainer
 
 
-def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weights_folder="checkpoints"):
+# NOTE: added argument `dataset_fraction` for the ablation study
+def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weights_folder="checkpoints", dataset_fraction: float=0.5):
     save_dir = Path(save_weights_folder)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    trainer = init_trainer(model_config, finetune=finetune)
+    trainer = init_trainer(model_config, finetune=finetune, dataset_fraction=dataset_fraction)
 
     if resume_path is not None:
         trainer.resume(Path(resume_path))
