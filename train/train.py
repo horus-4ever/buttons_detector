@@ -299,7 +299,12 @@ def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weig
     if resume_path is not None:
         trainer.resume(Path(resume_path))
 
+    # =========================================================
+    # NOTE: ablation study: gradual number of real images
+    # =========================================================
     num_epochs = model_config.training_parameters.num_epochs
+    num_epochs = int((1. / dataset_fraction) * num_epochs) # we want to scale the number of epochs accordingly
+    # =========================================================
     start_epoch = trainer.epoch
     # training loop
     for epoch in range(start_epoch, start_epoch + num_epochs):
