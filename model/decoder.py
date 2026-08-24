@@ -148,6 +148,9 @@ class DecoderLayer(nn.Module):
         B, Q, RQP, C = input.size()
         # [B, num_queries, RpQ, embed_dim] -> [B, RpQ * num_queries, embed_dim]
         input = input.view(B, Q * RQP, C)
+        # [num_queries, embed_dim] -> [num_queries * RpQ, embed_dim]
+        query_embed = query_embed.unsqueeze(1).expand(Q, RQP, C).contiguous()
+        query_embed = query_embed.view(Q * RQP, C)
         # computes k and q for queries attention
         # [B, RpQ * num_queries, embed_dim]
         k_queries = q_queries = self.with_pos_embed(input, query_embed) # NOTE: Ablation: no role embedding for the refpoints
