@@ -400,6 +400,7 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         self.attention_weights = nn.Linear(embed_dim, num_heads * num_levels * num_points * num_ref_points_per_query) # attention weights are learnable
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         self.sampling_offsets = nn.Linear(embed_dim, num_heads * num_levels * num_points * num_ref_points_per_query * 2) # learnable offsets for deformable attention
+        self.ref_fusion = nn.Linear(embed_dim * num_ref_points_per_query, embed_dim)
         # initialize the parameters
         self._reset_parameters()
 
@@ -415,7 +416,9 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         nn.init.zeros_(self.attention_weights.bias)
         nn.init.zeros_(self.sampling_offsets.weight)
         # TODO: do proper initialization
-        """
+        # when first rezied, sampling offsets are viewed as:
+        #   [batch, query_len, heads, num_levels, num_points, RpQ, 2]
+        # so let's take that into account
         thetas = torch.arange(self.num_heads, dtype=torch.float32) * (
             2.0 * math.pi / self.num_heads
         ) # we have here 4 attention heads, so it will here define the directions along the y and x axis
@@ -423,12 +426,13 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         grid_init = grid_init / grid_init.abs().max(dim=-1, keepdim=True)[0]
         grid_init = grid_init.view(self.num_heads, 1, 1, 2)
         grid_init = grid_init.repeat(1, self.num_levels, self.num_points, 1)
+        # grid_init: [n_heads, n_levels, n_points, 2]
+        # [n_heads, n_levels, n_points, 2] -> [n_heads, n_levels, n_points, RpQ, 2]
+        grid_init = grid_init.unsqueeze(3).expand(-1, -1, -1, self.num_ref_points_per_query, 2).contiguous()
         for i in range(self.num_points):
-            grid_init[:, :, i, :] *= i + 1
+            grid_init[:, :, i, :, :] *= i + 1
         with torch.no_grad():
             self.sampling_offsets.bias.copy_(grid_init.reshape(-1))
-        """
-        nn.init.uniform_(self.sampling_offsets.bias)
         # xavier uniform initialization for v_proj and out_proj
         nn.init.xavier_uniform_(self.v_proj.weight)
         nn.init.zeros_(self.v_proj.bias)
@@ -567,7 +571,18 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         # ==== - take the mean over RpQ, but we lose information        ====
         # ==== - simply return as it so that we don't lose information  ====
         # ==================================================================
-        # Let's implement the second option.
+        # [B, Q, heads, RpQ, head_dim] -> [B, Q, RpQ, heads, head_dim]
+        output = output.permute(0, 1, 3, 2, 4).contiguous()
+        # [B, Q, RpQ, heads, head_dim] -> [B, Q, RpQ, embed_dim]
+        output = output.view(batch_size, -1, self.num_ref_points_per_query, self.embed_dim)
+        # [B, Q, RpQ, embed_dim] -> [B, Q, embed_dim]
+        output = output.flatten(2)
+        output = self.ref_fusion(output) # take the mean over RpQ
+        # [B, Q, embed_dim]
+        output = self.out_proj(output)
+        return output, attn_weights, sampling_locations
+        # NOTE: DEADCODE
+
         # [B, Q, heads, RpQ, head_dim] -> [B, Q, RpQ, heads, head_dim]
         output = output.permute(0, 1, 3, 2, 4).contiguous()
         # [B, Q, RpQ, heads, head_dim] -> [B, Q, RpQ, embed_dim]
