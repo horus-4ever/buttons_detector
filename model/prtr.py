@@ -56,6 +56,15 @@ class PRTR(nn.Module):
         # NEW: The reference point embedding is there to encode the difference between a button and a hole.
         #      It is applied to all reference points on top of the query_embed, which encodes the pair information.
         self.refpoints_embed = nn.Embedding(nrefpointsperquery, self.d_model)
+        # ===========================================================
+        # NOTE: Ablation study: role of role embedding initialization
+        # ===========================================================
+        # we initialize both role to the same value
+        # we want to study the effect of training: does it learn to differentiate roles?
+        # motivation: random tensors are usually orthogonal
+        with torch.no_grad():
+            self.refpoints_embed.weight[1].copy_(self.refpoints_embed.weight[0])
+        # ===========================================================
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box

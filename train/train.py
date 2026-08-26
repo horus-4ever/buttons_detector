@@ -294,10 +294,22 @@ def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weig
 
     num_epochs = model_config.training_parameters.num_epochs
     start_epoch = trainer.epoch
+    # ===========================================================
+    # NOTE: Ablation study: role of role embedding initialization
+    # ===========================================================
+    # record initial value as well
+    role_metrics = [role_embedding_metric(trainer.model)]
+    # ===========================================================
     # training loop
     for epoch in range(start_epoch, start_epoch + num_epochs):
         # step one epoch of the trainer
         train_stats, val_stats = trainer.step()
+        # ===========================================================
+        # NOTE: Ablation study: role of role embedding initialization
+        # ===========================================================
+        metric = role_embedding_metric(trainer.model)
+        role_metrics.append(metric)
+        # ===========================================================
         # display the epoch results
         print(
             f"Epoch [{epoch + 1}/{start_epoch + num_epochs}] | "
@@ -309,3 +321,20 @@ def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weig
         if trainer.last_was_best:
             trainer.save_checkpoint(save_dir / "best.pt")
             print(f"    New best model saved with val loss: {val_stats['loss']:.4f}")
+    # ===========================================================
+    # NOTE: Ablation study: role of role embedding initialization
+    # ===========================================================
+    print(role_metrics)
+    # ===========================================================
+
+
+# ===========================================================
+# NOTE: Ablation study: role of role embedding initialization
+# ===========================================================
+def role_embedding_metric(model):
+    r1 = model.refpoints_embed.weights[0]
+    r2 = model.refpoints_embed.weights[1]
+    distance = (r1 - r2).norm()
+    cosine = torch.cosine_similarity(r1, r2)
+    return distance, cosine
+# ===========================================================
