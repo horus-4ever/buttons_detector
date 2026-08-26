@@ -332,9 +332,9 @@ def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weig
 # NOTE: Ablation study: role of role embedding initialization
 # ===========================================================
 def role_embedding_metric(model):
-    r1 = model.refpoints_embed.weights[0]
-    r2 = model.refpoints_embed.weights[1]
+    r1 = model.refpoints_embed.weight[0]
+    r2 = model.refpoints_embed.weight[1]
     distance = (r1 - r2).norm()
-    cosine = torch.cosine_similarity(r1, r2)
+    cosine = torch.cosine_similarity(r1, r2, dim=0)
     return distance, cosine
 # ===========================================================
