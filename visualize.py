@@ -42,7 +42,7 @@ class Prediction:
 
 def load_model(model_config_path: str | Path, model_weights_path: str | Path, device: torch.device):
     model = build_model_from(str(model_config_path))
-    checkpoint = torch.load(model_weights_path, map_location=device)
+    checkpoint = torch.load(model_weights_path, map_location=device, weights_only=False)
     if "model_state_dict" not in checkpoint:
         raise KeyError(
             f"Checkpoint does not contain 'model_state_dict'. "
@@ -146,6 +146,7 @@ def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_location
     W_img, H_img = image.size
     image = image.resize((512, 512))
     num_queries, num_heads, num_levels, num_points = attn_maps.size()
+    num_queries = num_queries // 2
     # --> [query_len, heads, num_levels, num_points, 2]
     sampling_locations = sampling_locations[0] # first image of the batch
     # flatten that
@@ -166,9 +167,10 @@ def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_location
         # draw the attention
         overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
         image_draw = ImageDraw.Draw(overlay)
+        attn_map = sorted(attn_map)
         for (posx, posy), value in zip(locations, attn_map):
-            px = float(posx * W_img)
-            py = float(posy * H_img)
+            px = float(posx * 512)
+            py = float(posy * 512)
             alpha = int(255 * float(value))
             radius = 5
             image_draw.ellipse(
@@ -181,14 +183,14 @@ def visualize_decoder_attention(image: Image.Image, attn_maps, sampling_location
             fastener_bbox = prediction.fastener_bbox
             # first draw the button center
             x, y = button_bbox.cx / W_img * 512, button_bbox.cy / H_img * 512
-            radius = 10
+            radius = 3
             image_draw.ellipse(
                 (x - radius, y - radius, x + radius, y + radius),
                 fill=(0, 255, 0, 255)
             )
             # then draw the fastener center
             x, y = fastener_bbox.cx / W_img * 512, fastener_bbox.cy / H_img * 512
-            radius = 10
+            radius = 3
             image_draw.ellipse(
                 (x - radius, y - radius, x + radius, y + radius),
                 fill=(0, 255, 255, 255)
