@@ -56,6 +56,12 @@ class PRTR(nn.Module):
         # NEW: The reference point embedding is there to encode the difference between a button and a hole.
         #      It is applied to all reference points on top of the query_embed, which encodes the pair information.
         self.refpoints_embed = nn.Embedding(nrefpointsperquery, self.d_model)
+        # =====================================================================
+        # NOTE: Ablation study: set the position embedding to 0 and no gradient
+        # =====================================================================
+        nn.init.zeros_(self.refpoints_embed.weight)
+        self.refpoints_embed.requires_grad_(False)
+        # =====================================================================
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box
