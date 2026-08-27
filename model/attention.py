@@ -554,7 +554,7 @@ class MultiscaleMultireferencesDeformableAttention(nn.Module):
         # get the sampling points by adding the offsets to the reference points
         spatial_shapes = spatial_shapes.to(device=query.device, dtype=torch.long) # put on the GPU
         offset_normalizer = torch.stack(
-            [spatial_shapes[:, 0], spatial_shapes[:, 1]],
+            [spatial_shapes[:, 1], spatial_shapes[:, 0]],
             dim=-1,
         ).to(dtype=query.dtype) # [num_levels, 2] (width, height) for normalizing the offsets
         offset_normalizer = offset_normalizer.to(dtype=query.dtype)
