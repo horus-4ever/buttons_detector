@@ -113,18 +113,13 @@ class DeformableTransformer(nn.Module):
         token_embed = query_tokens + role_tokens # we construct from both query and reference points embedings
         # [Q, RqP, 2]
         reference_points = self.proj_reference_points(token_embed).sigmoid()
-        # ====================================================================
-        # NOTE: Ablation study: set the role embedding to 0 in the decoder
-        # ====================================================================
-        ablation_refpoints_embed = torch.zeros_like(refpoints_embed, device=object_queries.device, requires_grad=False)
-        # ====================================================================
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
             reference_points=reference_points, # [query_len, RpQ, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query_embed=query_embed, # [num_queries, embed_dim]
-            refpoints_embed=ablation_refpoints_embed, # [RpQ, embed_dim] # NOTE: Ablation study
+            refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
         # decoder_attn_weights: decoder_layers * [batch, query_len * RqP, heads, num_levels, num_points]

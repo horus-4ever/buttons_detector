@@ -166,7 +166,11 @@ class DecoderLayer(nn.Module):
         # computes v, k and q for memory attention
         v_memory = memory # [B, query_len, embed_dim]
         # [B, num_queries * RqP, embed_dim]
-        q_memory = self.with_queries_embed(input, query_embed, refpoints_embed)
+        # ====================================================================
+        # NOTE: Ablation study: no role embedding for the memory attention
+        # ====================================================================
+        q_memory = self.with_pos_embed(input, query_embed) # no role embedding
+        # ====================================================================
         # resize the reference_points to the right size
         # [query_len, RpQ, 2] -> [query_len * RpQ, 2]
         reference_points = reference_points.view(Q * self.num_ref_points_per_query, 2)
