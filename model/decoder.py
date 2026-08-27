@@ -169,7 +169,8 @@ class DecoderLayer(nn.Module):
         # ====================================================================
         # NOTE: Ablation study: no role embedding for the memory attention
         # ====================================================================
-        q_memory = self.with_pos_embed(input, query_embed) # no role embedding
+        no_embedding = torch.zeros_like(refpoints_embed, device=input.device, requires_grad=False)
+        q_memory = self.with_queries_embed(input, query_embed, no_embedding) # null embedding
         # ====================================================================
         # resize the reference_points to the right size
         # [query_len, RpQ, 2] -> [query_len * RpQ, 2]
