@@ -135,9 +135,10 @@ class DatasetConfig:
         validation_start = lines.index("validation:\n") + 1
         test_start = lines.index("test:\n") + 1
         # load the train, validation and test annotations paths
-        train_paths = [Path(line.strip()) for line in lines[train_start:validation_start - 1]]
-        validation_paths = [Path(line.strip()) for line in lines[validation_start:test_start - 1]]
-        test_paths = [Path(line.strip()) for line in lines[test_start:]]
+        # NOTE: this is a hotfix to make this work on a cache created on another computer
+        train_paths = [self.dataset_root / Path(line.strip()).name for line in lines[train_start:validation_start - 1]]
+        validation_paths = [self.dataset_root / Path(line.strip()).name for line in lines[validation_start:test_start - 1]]
+        test_paths = [self.dataset_root / Path(line.strip()).name for line in lines[test_start:]]
         # now try to load the dataset from the split cache
         train_annotations = []
         validation_annotations = []
