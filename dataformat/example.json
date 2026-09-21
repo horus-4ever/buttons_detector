@@ -18,7 +18,7 @@
                         "height_ndc": 0.1
                     }
                 },
-                "fastener": {
+                "counterpart": {
                     "type": "velcro",
                     "visible": true,
                     "bbox": {
@@ -27,7 +27,8 @@
                         "width_ndc": 0.1,
                         "height_ndc": 0.1
                     }
-                }
+                },
+                "fastened": true
             }
         ]
     }

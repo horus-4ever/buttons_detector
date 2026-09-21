@@ -88,10 +88,10 @@ class Button:
 
 
 @dataclass
-class Fastener:
+class Counterpart:
     """
-    Represents a fastener.
-    A fastener will be generally a velcro, a button hole or a snap button.
+    Represents a counterpart.
+    A counterpart will be generally a velcro, a buttonhole or a snap button.
     """
     bbox: BoundingBox
     visible: bool
@@ -111,7 +111,7 @@ class Fastener:
         }
 
     @classmethod
-    def from_json(cls, json_data: dict) -> "Fastener":
+    def from_json(cls, json_data: dict) -> "Counterpart":
         return cls(
             bbox=BoundingBox.from_json(json_data["bbox"]),
             visible=json_data["visible"],
@@ -122,29 +122,32 @@ class Fastener:
 @dataclass
 class Pair:
     """
-    Represents a pair between a button and a fastener.
+    Represents a pair between a button and a counterpart.
     """
     button: Button
-    fastener: Fastener
+    counterpart: Counterpart
+    fastened: bool
 
     def to_json(self):
         return {
             "button": self.button.to_json(),
-            "fastener": self.fastener.to_json()
+            "counterpart": self.counterpart.to_json(),
+            "fastened": self.fastened
         }
 
     @classmethod
     def from_json(cls, json_data: dict) -> "Pair":
         return cls(
             button=Button.from_json(json_data["button"]),
-            fastener=Fastener.from_json(json_data["fastener"])
+            counterpart=Counterpart.from_json(json_data["counterpart"]),
+            fastened=json_data["fastened"]
         )
 
 
 @dataclass
 class Cloth:
     """
-    Represent a clothing item, with its pairs of <button, fastener>.
+    Represent a clothing item, with its pairs of <button, counterpart>.
     `segmentation` represents the path to the segmentation mask of the clothing item.
     """
     type: str
@@ -209,14 +212,14 @@ class Annotation:
         pairs = self.cloth.pairs
         if pairs:
             labels_button = torch.stack([label.button.to_tensor(device=device) for label in pairs])
-            labels_fastener = torch.stack([label.fastener.to_tensor(device=device) for label in pairs])
+            labels_counterpart = torch.stack([label.counterpart.to_tensor(device=device) for label in pairs])
         else:
             labels_button = torch.tensor([], device=device)
-            labels_fastener = torch.tensor([], device=device)
-        visibility_fastener = torch.tensor([label.fastener.visible for label in pairs], dtype=torch.float, device=device)
+            labels_counterpart = torch.tensor([], device=device)
+        visibility_counterpart = torch.tensor([label.counterpart.visible for label in pairs], dtype=torch.float, device=device)
         visibility_button = torch.tensor([label.button.visible for label in pairs], dtype=torch.float, device=device)
         classes = torch.zeros(labels_button.size()[0], dtype=torch.long, device=device)
-        return classes, labels_button, labels_fastener, visibility_button, visibility_fastener
+        return classes, labels_button, labels_counterpart, visibility_button, visibility_counterpart
 
     def to_json(self):
         return {
@@ -233,28 +236,41 @@ class Annotation:
 
 
 @dataclass
-class DataSplit:
+class Garment:
     """
-    Represents a split of the dataset.
+    Represents a garment
     """
-    seed: int
-    train: float
-    val: float
-    test: float
+    type: str
+    fastener: str
+    assistive: bool
+    n_pairs: int
+    description: str
 
     def to_json(self):
         return {
-            "seed": self.seed,
-            "train": self.train,
-            "val": self.val,
-            "test": self.test
+            "type": self.type,
+            "fastener": self.fastener,
+            "assistive": self.assistive,
+            "n_pairs": self.n_pairs,
+            "description": self.description
         }
 
     @classmethod
-    def from_json(cls, json_data: dict) -> "DataSplit":
+    def from_json(cls, json_data: dict) -> "Garment":
         return cls(
-            seed=json_data["seed"],
-            train=json_data["train"],
-            val=json_data["val"],
-            test=json_data["test"]
+            type=json_data["type"],
+            fastener=json_data["fastener"],
+            assistive=json_data["assistive"],
+            n_pairs=json_data["n_pairs"],
+            description=json_data["description"]
+        )
+
+    @classmethod
+    def empty(cls) -> "Garment":
+        return cls(
+            type="",
+            fastener="",
+            assistive=False,
+            n_pairs=0,
+            description=""
         )

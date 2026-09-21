@@ -64,34 +64,35 @@ class CVATParser:
         button_bbox = self._parse_bbox(cvat_box)
         return pair_id, df.Button(button_bbox, visible=True)
     
-    def _parse_fastener(self, fastener: xml.Element) -> tuple[str, df.Fastener]:
-        cvat_box = fastener
-        pair_id = fastener.find("attribute[@name='pair_id']").text
-        visibility = fastener.find("attribute[@name='visible']").text == "true"
+    def _parse_counterpart(self, counterpart: xml.Element) -> tuple[str, bool, df.Counterpart]:
+        cvat_box = counterpart
+        pair_id = counterpart.find("attribute[@name='pair_id']").text
+        visibility = counterpart.find("attribute[@name='visible']").text == "true"
+        fastened = counterpart.find("attribute[@name='fastened']").text == "true"
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         bbox = self._parse_bbox(cvat_box)
-        return pair_id, df.Fastener(bbox, visible=visibility, type="fastener")
+        return pair_id, fastened, df.Counterpart(bbox, visible=visibility, type="counterpart")
     
     def _parse_pairs(self, image: xml.Element) -> list[df.Pair]:
         buttons = {}
-        fasteners = {}
+        counterparts = {}
         boxes = image.findall("box")
         buttons_boxes = list(filter(lambda box: box.get("label") == "button", boxes))
-        fasteners_boxes = list(filter(lambda box: box.get("label") == "fastener", boxes))
+        counterparts_boxes = list(filter(lambda box: box.get("label") == "counterpart", boxes))
         for button in buttons_boxes:
             pair_id, button = self._parse_button(button)
             buttons[pair_id] = button
-        for fastener in fasteners_boxes:
-            pair_id, fastener = self._parse_fastener(fastener)
-            fasteners[pair_id] = fastener
+        for counterpart in counterparts_boxes:
+            pair_id, fastened, counterpart = self._parse_counterpart(counterpart)
+            counterparts[pair_id] = (counterpart, fastened)
         # since we build pairs, there should be an equal number of each
-        assert len(buttons) == len(fasteners), f"There should be an equal number of buttons and fasteners.\n{buttons}\n{fasteners}"
+        assert len(buttons) == len(counterparts), f"There should be an equal number of buttons and counterparts.\n{buttons}\n{counterparts}"
         # now build each pair, the order doesn't matter
         pairs = []
         for pair_id in buttons:
-            button, fastener = buttons[pair_id], fasteners[pair_id]
-            pair = df.Pair(button, fastener)
+            button, (counterpart, fastened) = buttons[pair_id], counterparts[pair_id]
+            pair = df.Pair(button, counterpart, fastened)
             pairs.append(pair)
         return pairs
     

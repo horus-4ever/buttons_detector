@@ -1,4 +1,3 @@
-
 from .dataformat import *
 import json
 from pathlib import Path
@@ -39,7 +38,7 @@ class PairDataset(Dataset):
         """
         annotation: Annotation = self.annotations[index]
         # open the image and get the annotations as torch tensors
-        image_path = self.root.images_dir / annotation.image.url
+        image_path = annotation.image.url
         image = Image.open(image_path)
         # transform the image if any transformation needs to be applied
         if self.transform:
@@ -53,32 +52,35 @@ class DatasetConfig:
     Represents the dataset configuration.
     """
     dataset_root: Path
-    images_dir: Path
-    annotations_dir: Path
-    data_split: DataSplit
-    train_indices: list[int] = field(default_factory=list)
-    validation_indices: list[int] = field(default_factory=list)
-    test_indices: list[int] = field(default_factory=list)
+    train_paths: list[Path]
+    val_paths: list[Path]
+    test_paths: list[Path]
 
     def to_json(self) -> dict:
         return {
-            "dataset_root": self.dataset_root,
-            "images_dir": self.images_dir,
-            "annotations_dir": self.annotations_dir,
-            "data_split": self.data_split.to_json()
+            "root": self.dataset_root,
+            "train": self.train_paths,
+            "validation": self.val_paths,
+            "test": self.test_paths
         }
 
     @classmethod
     def from_json(cls, json_data: dict) -> "DatasetConfig":
         dataset_root = Path(json_data["root"])
-        images_dir = dataset_root / json_data["images_dir"]
-        annotations_dir = dataset_root / json_data["annotations_dir"]
-
+        train_paths = [
+            dataset_root / garment_name for garment_name in json_data["train"]
+        ]
+        val_paths = [
+            dataset_root / garment_name for garment_name in json_data["validation"]
+        ]
+        test_paths = [
+            dataset_root / garment_name for garment_name in json_data["test"]
+        ]
         return cls(
             dataset_root=dataset_root,
-            images_dir=images_dir,
-            annotations_dir=annotations_dir,
-            data_split=DataSplit.from_json(json_data["data_split"]),
+            train_paths=train_paths,
+            val_paths=val_paths,
+            test_paths=test_paths
         )
     
     @classmethod
@@ -89,107 +91,63 @@ class DatasetConfig:
         with open(config_path, "r") as f:
             json_data = json.load(f)
         return cls.from_json(json_data)
-    
-    def _has_split_cache(self) -> bool:
-        """
-        Checks if the dataset has a split cache.
-        """
-        return (Path(self.dataset_root) / "dataset.cache").exists()
-    
-    def _create_split_cache(self):
-        """
-        Creates a split cache for the dataset
-        """
-        cache_path = self.dataset_root / "dataset.cache"
-        # now we create the split indices and save them in the cache
-        annotations = np.array(list(self.annotations_dir.glob("*.json")))
-        dataset_length = len(annotations)
-        train_size = int(dataset_length * self.data_split.train)
-        val_size = int(dataset_length * self.data_split.val)
-        test_size = dataset_length - train_size - val_size
-        # set the seed for reproducibility
-        np.random.seed(self.data_split.seed)
-        indices = np.arange(dataset_length)
-        np.random.shuffle(indices)
-        self.train_indices = indices[:train_size].tolist()
-        self.validation_indices = indices[train_size:train_size + val_size].tolist()
-        self.test_indices = indices[train_size + val_size:].tolist()
-        # save the split indices in the cache
-        with open(cache_path, "w") as f:
-            print("train:", file=f)
-            print(*annotations[self.train_indices], sep="\n", file=f)
-            print("validation:", file=f)
-            print(*annotations[self.validation_indices], sep="\n", file=f)
-            print("test:", file=f)
-            print(*annotations[self.test_indices], sep="\n", file=f)
 
-    def _load_dataset(self):
-        """
-        Loads the dataset from the split cache.
-        """
-        cache_path = self.dataset_root / "dataset.cache"
-        with open(cache_path, "r") as f:
-            lines = f.readlines()
-        # find the indices of the split sections
-        train_start = lines.index("train:\n") + 1
-        validation_start = lines.index("validation:\n") + 1
-        test_start = lines.index("test:\n") + 1
-        # load the train, validation and test annotations paths
-        # NOTE: this is a hotfix to make this work on a cache created on another computer
-        train_paths = [self.dataset_root / Path(line.strip()).name for line in lines[train_start:validation_start - 1]]
-        validation_paths = [self.dataset_root / Path(line.strip()).name for line in lines[validation_start:test_start - 1]]
-        test_paths = [self.dataset_root / Path(line.strip()).name for line in lines[test_start:]]
-        # now try to load the dataset from the split cache
-        train_annotations = []
-        validation_annotations = []
-        test_annotations = []
-        print("Loading dataset from split cache...")
-        for path in train_paths:
-            with open(path, "r") as f:
-                json_data = json.load(f)
-            train_annotations.append(Annotation.from_json(json_data))
-        for path in validation_paths:
-            with open(path, "r") as f:
-                json_data = json.load(f)
-            validation_annotations.append(Annotation.from_json(json_data))
-        for path in test_paths:
-            with open(path, "r") as f:
-                json_data = json.load(f)
-            test_annotations.append(Annotation.from_json(json_data))
-        print("Dataset loaded from split cache.")
-        # set it as cache on the object
-        self._train_annotations = train_annotations
-        self._validation_annotations = validation_annotations
-        self._test_annotations = test_annotations
+    def _was_loaded(self):
+        return hasattr(self, "_train_annotations")
 
     @property
     def train_annotations(self) -> list[Annotation]:
-        if not self._has_split_cache():
+        if not self._was_loaded():
             raise ValueError("Dataset not loaded. Call `load()` first.")
         return self._train_annotations
 
     @property
     def validation_annotations(self) -> list[Annotation]:
-        if not self._has_split_cache():
+        if not self._was_loaded():
             raise ValueError("Dataset not loaded. Call `load()` first.")
         return self._validation_annotations
 
     @property
     def test_annotations(self) -> list[Annotation]:
-        if not self._has_split_cache():
+        if not self._was_loaded():
             raise ValueError("Dataset not loaded. Call `load()` first.")
         return self._test_annotations
 
+    def _load_annotations(self, path: Path):
+        images_directory = path / "images"
+        annotations_directory = path / "annotations"
+        annotations = []
+        for annotation_file in annotations_directory.glob("*.json"):
+            with open(annotation_file, "r") as file:
+                json_data = json.load(file)
+            annotation = Annotation.from_json(json_data)
+            # now change the image url
+            annotation.image.url = str(images_directory / annotation.image.url)
+            annotations.append(annotation)
+        return annotations
+
     def load(self):
         """
-        Checks if the dataset has a split cache, and creates one if it doesn't exist.
+        Loads the dataset.
         """
-        if not self._has_split_cache():
-            print("No split cache found. Creating one...")
-            self._create_split_cache()
-            print("Split cache created.")
-        # now load the dataset
-        self._load_dataset()
+        train_annotations = []
+        validation_annotations = []
+        test_annotations = []
+        for train_path in self.train_paths:
+            train_path = self.dataset_root / train_path
+            annotations = self._load_annotations(train_path)
+            train_annotations.extend(annotations)
+        for val_path in self.val_paths:
+            val_path = self.dataset_root / val_path
+            annotations = self._load_annotations(val_path)
+            validation_annotations.extend(annotations)
+        for test_path in self.test_paths:
+            test_path = self.dataset_root / test_path
+            annotations = self._load_annotations(test_path)
+            test_annotations.extend(annotations)
+        self._train_annotations = train_annotations
+        self._validation_annotations = validation_annotations
+        self._test_annotations = test_annotations
         return self
 
     def to_torch_dataset(self):
