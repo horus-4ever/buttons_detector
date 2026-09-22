@@ -59,7 +59,7 @@ class PRTR(nn.Module):
         self.position_embedding = PositionEmbeddingSine2D(num_pos_feats=self.d_model // 2)
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box
-        self.button_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
+        self.pred_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -130,13 +130,13 @@ class PRTR(nn.Module):
         pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
         # for the buttons we of course need to keep by RpQ
         # [B, query_len, RpQ, 4]
-        button_deltas = self.button_head(hs) # [B, Q, RpQ, 4]
+        deltas = self.pred_head(hs) # [B, Q, RpQ, 4]
         # take the button centers, which are the first two coordinates
-        button_centers = button_deltas[..., :2] # [B, Q, RpQ, 2]
-        pred_buttons_centers = (inverse_sigmoid(reference_points) + button_centers).sigmoid()  # [B, Q, RpQ, 2]
+        centers = deltas[..., :2] # [B, Q, RpQ, 2]
+        pred_centers = (inverse_sigmoid(reference_points) + centers).sigmoid()  # [B, Q, RpQ, 2]
         # now the width and height is given by the last two coordinates
-        pred_buttons_wh = button_deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
-        pred_boxes = torch.cat([pred_buttons_centers, pred_buttons_wh], dim=-1)  # [B, Q, RpQ, 4]
+        pred_wh = deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
+        pred_boxes = torch.cat([pred_centers, pred_wh], dim=-1)  # [B, Q, RpQ, 4]
 
         return {
             "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
