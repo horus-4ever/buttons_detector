@@ -76,11 +76,11 @@ class HungarianMatcher(nn.Module):
                 pred_buttons[b][:, None, :], # [Q, 1, 4]
                 tgt_buttons[None, :, :], # [1, N, 4]
             ) # [Q, N]
-            giou_holes = compute_giou(
+            giou_counterparts = compute_giou(
                 pred_holes[b][:, None, :], # [Q, 1, 4]
                 tgt_holes[None, :, :], # [1, N, 4]
             ) # [Q, N]
-            cost_giou = -(giou_buttons + giou_holes)
+            cost_giou = -(giou_buttons + giou_counterparts)
             # total cost
             C = self.cost_class * cost_class + self.cost_coord * (cost_coord + cost_hole) + self.cost_giou * cost_giou
             C = C.cpu()
@@ -90,7 +90,6 @@ class HungarianMatcher(nn.Module):
                 torch.as_tensor(pred_ind, dtype=torch.int64),
                 torch.as_tensor(tgt_ind, dtype=torch.int64)
             ))
-
         return indices
 
 
@@ -101,13 +100,10 @@ class SetCriterion(nn.Module):
       - button coordinate prediction
     """
 
-    def __init__(
-        self,
-        num_classes: int,
-        matcher: HungarianMatcher,
-        weight_dict: Dict[str, float],
-        eos_coef: float = 0.1,
-    ):
+    def __init__(self, num_classes: int, matcher: HungarianMatcher, weight_dict: Dict[str, float], eos_coef: float = 0.1):
+        """
+        eos_coef: relative classification weight applied to the no-object category
+        """
         super().__init__()
         self.num_classes = num_classes
         self.matcher = matcher
@@ -116,21 +112,23 @@ class SetCriterion(nn.Module):
         # Weight for classification:
         # class 0 = button
         # class 1 = no-object
-        empty_weight = torch.ones(num_classes + 1)
+        empty_weight = torch.ones(num_classes + 1) # [C+1]
         empty_weight[-1] = eos_coef
         self.register_buffer("empty_weight", empty_weight)
 
-    def loss_labels(self, outputs, targets, indices):
+    def class_loss(self, outputs, targets, indices):
+        """
+        Compute the cross-entropy loss of the predicted pair classes.
+        """
         src_logits = outputs["pred_logits"]  # [B, Q, C+1]
-        bs, num_queries, num_classes_plus_bg = src_logits.shape
-
-        # default target class for all queries = no-object
+        bs, num_queries, num_classes = src_logits.shape
+        # default target class for all queries: no-object
         target_classes = torch.full(
             (bs, num_queries),
             fill_value=self.num_classes,  # index of no-object
             dtype=torch.int64,
             device=src_logits.device,
-        )
+        ) # [B, Q]
 
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if len(src_idx) > 0:
@@ -138,48 +136,15 @@ class SetCriterion(nn.Module):
 
         loss_ce = F.cross_entropy(
             src_logits.transpose(1, 2),  # [B, C+1, Q]
-            target_classes,
+            target_classes, # [B, Q]
             weight=self.empty_weight, # type: ignore
         )
         return {"loss_ce": loss_ce}
 
-    def loss_pairs(self, outputs, targets, indices):
-        # WARNING: outputs are now of shape [B, Q, RqP, 4]
-        src_coords = outputs["pred_boxes"]  # [B, Q, RqP, 4]
-        # split into buttons and keypoints
-        src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
-        src_counterparts_coords = src_coords[:, :, 1, :] # [B, Q, 4]
-
-        matched_button_coords = []
-        matched_counterparts_coords = []
-        matched_button_target = []
-        matched_counterparts_target = []
-        # get the matched button and keypoint predictions
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if len(src_idx) > 0:
-                matched_button_coords.append(src_button_coords[b, src_idx])
-                matched_counterparts_coords.append(src_counterparts_coords[b, src_idx])
-                matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-                matched_counterparts_target.append(targets[b]["counterparts"][tgt_idx].to(src_coords.device))
-        # if there is no predictions, then the loss is null
-        if len(matched_button_coords) == 0:
-            loss_button = torch.tensor(0.0, device=src_coords.device)
-        else:
-            # [B, Q, 4] -> [B * Q, 4]
-            matched_button_coords = torch.cat(matched_button_coords, dim=0)
-            # [B, Q, 4] -> [B * Q, 4]
-            matched_counterparts_coords = torch.cat(matched_counterparts_coords, dim=0)
-            matched_button_target = torch.cat(matched_button_target, dim=0)
-            matched_counterparts_target = torch.cat(matched_counterparts_target, dim=0)
-            # now we define the loss
-            # we first compute two independent losses for buttons and counterparts
-            loss_buttons = F.l1_loss(matched_button_coords, matched_button_target)
-            loss_counterparts = F.l1_loss(matched_counterparts_coords, matched_counterparts_target)
-            loss_button = loss_buttons + loss_counterparts
-        return {"loss_button": loss_button}
-    
-    def loss_giou(self, outputs, targets, indices):
-        # WARNING: outputs are now of shape [B, Q, RqP, 4]
+    def pair_loss(self, outputs, targets, indices):
+        """
+        Compute the L1 and GIoU losses from the predicted pairs.
+        """
         src_coords = outputs["pred_boxes"]  # [B, Q, RqP, 4]
         # split into buttons and counterparts
         src_button_coords = src_coords[:, :, 0, :] # [B, Q, 4]
@@ -189,39 +154,94 @@ class SetCriterion(nn.Module):
         matched_counterparts_coords = []
         matched_button_target = []
         matched_counterparts_target = []
-        # get the matched button and keypoint predictions
+        # get the matched button and counterpart predictions from the Hungarian Matcher indices
         for b, (src_idx, tgt_idx) in enumerate(indices):
-            if len(src_idx) > 0:
-                matched_button_coords.append(src_button_coords[b, src_idx])
-                matched_counterparts_coords.append(src_counterparts_coords[b, src_idx])
-                matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
-                matched_counterparts_target.append(targets[b]["counterparts"][tgt_idx].to(src_coords.device))
-        # if there is no predictions, then the loss is null
-        if len(matched_button_coords) == 0:
-            giou_loss = torch.tensor(0.0, device=src_coords.device)
+            if len(src_idx) == 0:
+                continue
+            matched_button_coords.append(src_button_coords[b, src_idx])
+            matched_counterparts_coords.append(src_counterparts_coords[b, src_idx])
+            matched_button_target.append(targets[b]["buttons"][tgt_idx].to(src_coords.device))
+            matched_counterparts_target.append(targets[b]["counterparts"][tgt_idx].to(src_coords.device))
+        # compute the losses
+        pair_losses = {}
+        if len(matched_button_coords) == 0: # there may be no targets or no predictions
+            L1_losses = self._null_L1_loss(src_coords.device)
+            GIoU_losses = self._null_GIoU_loss(src_coords.device)
         else:
-            matched_pred_buttons = torch.cat(matched_button_coords, dim=0)
-            matched_pred_counterparts = torch.cat(matched_counterparts_coords, dim=0)
-            matched_tgt_buttons = torch.cat(matched_button_target, dim=0)
-            matched_tgt_counterparts = torch.cat(matched_counterparts_target, dim=0)
-            giou_buttons = compute_giou(matched_pred_buttons, matched_tgt_buttons)
-            giou_buttons_loss = (1 - giou_buttons).mean()
-            giou_counterparts = compute_giou(matched_pred_counterparts, matched_tgt_counterparts)
-            giou_counterparts_loss = (1 - giou_counterparts).mean()
-            giou_loss = giou_buttons_loss + giou_counterparts_loss
-        return {"loss_giou": giou_loss}
+            # put the tensors in the right size
+            matched_button_coords = torch.cat(matched_button_coords, dim=0) # [B * Q, 4]
+            matched_counterparts_coords = torch.cat(matched_counterparts_coords, dim=0) # [B * Q, 4]
+            matched_button_target = torch.cat(matched_button_target, dim=0)
+            matched_counterparts_target = torch.cat(matched_counterparts_target, dim=0)
+            # now we compute both the L1 loss and the GIoU loss
+            L1_losses = self.L1_loss(matched_button_coords, matched_button_target, matched_counterparts_coords, matched_counterparts_target)
+            GIoU_losses = self.GIoU_loss(matched_button_coords, matched_button_target, matched_counterparts_coords, matched_counterparts_target)
+        pair_losses.update(L1_losses)
+        pair_losses.update(GIoU_losses)
+        return pair_losses
+
+    def L1_loss(self, pred_button_coords, target_button_coords, pred_counterpart_coords, target_counterpart_coords):
+        """
+        Compute the L1 loss.
+        """
+        loss_buttons = F.l1_loss(pred_button_coords, target_button_coords, reduction="mean")
+        loss_counterparts = F.l1_loss(pred_counterpart_coords, target_counterpart_coords, reduction="mean")
+        loss_pair = loss_buttons + loss_counterparts
+        return {
+            "L1_loss_pair": loss_pair,
+            "L1_loss_buttons": loss_buttons,
+            "L1_loss_counterparts": loss_counterparts
+        }
+
+    
+    def GIoU_loss(self, pred_button_coords, target_button_coords, pred_counterpart_coords, target_counterpart_coords):
+        """
+        Compute the GIoU loss.
+        """
+        giou_buttons = compute_giou(pred_button_coords, target_button_coords)
+        giou_buttons_loss = (1 - giou_buttons).mean()
+        giou_counterparts = compute_giou(pred_counterpart_coords, target_counterpart_coords)
+        giou_counterparts_loss = (1 - giou_counterparts).mean()
+        # the pair GIoU loss is the sum of both components losses
+        giou_loss = giou_buttons_loss + giou_counterparts_loss
+        return {
+            "GIoU_loss_pair": giou_loss,
+            "GIoU_loss_buttons": giou_buttons_loss,
+            "GIoU_loss_counterparts": giou_counterparts_loss
+        }
+
+    def _null_L1_loss(self, device):
+        """
+        Get a null L1 loss.
+        """
+        return {
+            "L1_loss_pair": torch.tensor(0.0, device=device),
+            "L1_loss_buttons": torch.tensor(0.0, device=device),
+            "L1_loss_counterparts": torch.tensor(0.0, device=device)
+        }
+
+    def _null_GIoU_loss(self, device):
+        """
+        Get a null GIoU loss.
+        """
+        return {
+            "GIoU_loss_pair": torch.tensor(0.0, device=device),
+            "GIoU_loss_buttons": torch.tensor(0.0, device=device),
+            "GIoU_loss_counterparts": torch.tensor(0.0, device=device)
+        }
 
 
     def forward(self, outputs, targets):
         indices = self.matcher(outputs, targets)
-
+        # compute the losses
         losses = {}
-        losses.update(self.loss_labels(outputs, targets, indices))
-        losses.update(self.loss_pairs(outputs, targets, indices))
-        losses.update(self.loss_giou(outputs, targets, indices))
-        total_loss = 0.0
-        for k, v in losses.items():
-            total_loss = total_loss + self.weight_dict[k] * v
-
+        losses.update(self.class_loss(outputs, targets, indices))
+        losses.update(self.pair_loss(outputs, targets, indices))
+        # the total loss is the weighted sum of the losses
+        total_loss = (
+            losses["class_loss"] * self.weight_dict["class_loss"] +
+            losses["L1_loss_pair"] * self.weight_dict["L1_loss"] +
+            losses["GIoU_loss_pair"] * self.weight_dict["GIoU_loss"]
+        )
         losses["loss"] = total_loss
         return losses
