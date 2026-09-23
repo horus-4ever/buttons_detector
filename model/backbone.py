@@ -40,7 +40,7 @@ class MultiscaleResNet50(nn.Module):
 
     def forward(self, x):
         """
-        Extract layers 1, 2 and 4 from the ResNet50 backbone.
+        Extract layers 1, 2, 3 and 4 from the ResNet50 backbone.
         - x: [B, C, W, H]
 
         - output: (features l * [B, embed_dim, Hl, Wl], spatial_shapes l * [2])
