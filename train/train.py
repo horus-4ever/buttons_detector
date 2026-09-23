@@ -27,7 +27,19 @@ def seed_worker(worker_id: int):
 
 
 class Trainer:
-    def __init__(self, model, criterion, optimizer, scheduler, device, dataloader, val_dataloader, configuration):
+    def __init__(
+            self,
+            model,
+            criterion,
+            optimizer,
+            scheduler,
+            device,
+            dataloader,
+            val_dataloader,
+            model_config: ModelConfig,
+            dataset_config: DatasetConfig,
+            finetune: bool
+        ):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
@@ -35,8 +47,11 @@ class Trainer:
         self.device = device
         self.val_dataloader = val_dataloader
         self.dataloader = dataloader
-        self.configuration = configuration
+        self.model_config = model_config
+        self.dataset_config = dataset_config
+        self.finetune = finetune
         self.epoch = 0
+        self.losses = [] # save losses over epochs
         self.best_val_loss = float("inf")
         self.last_was_best = False
 
@@ -64,26 +79,28 @@ class Trainer:
         self.model.train()
         self.criterion.train()
         self.model.backbone.body.eval() # freeze the backbone
-
+        # store the accumulated losses
         running: Dict[str, float] = {}
-
+        # epoch main loop
         for images, padding_mask, annotations, (W, H) in self.dataloader:
             # annotations: b * Annotation
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
             # now transform the targets into tensors
             targets = self._annotations_to_tensor(annotations, device=self.device)
-
+            # inference of the batch
             outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
 
             self.optimizer.zero_grad(set_to_none=True)
-            losses["loss"].backward()
+            losses["loss"].backward() # backward propagation on the global loss
             self.optimizer.step()
-
+            # accumulate the losses stored in the `losses` dict
             self._accumulate_losses(running, losses)
-
-        return self._mean_losses(running, len(self.dataloader))
+        # compute and return the mean of the losses over all batches
+        nb_batches = len(self.dataloader)
+        mean_losses = self._mean_losses(running, nb_batches)
+        return mean_losses
 
     @torch.no_grad()
     def evaluate(self):
@@ -91,35 +108,39 @@ class Trainer:
         self.criterion.eval()
 
         running: Dict[str, float] = {}
-
+        # evaluation main loop
         for images, padding_mask, annotations, (W, H) in self.val_dataloader:
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
             # now transform the targets into tensors
             targets = self._annotations_to_tensor(annotations, device=self.device)
-
             outputs = self.model(images, padding_mask)
             losses = self.criterion(outputs, targets)
-
             self._accumulate_losses(running, losses)
-
-        return self._mean_losses(running, len(self.val_dataloader))
+        nb_batches = len(self.val_dataloader)
+        mean_losses = self._mean_losses(running, nb_batches)
+        return mean_losses
 
     def step(self):
-        train_stats = self.train_one_epoch()
-        val_stats = self.evaluate()
-
+        """
+        Perform one training epoch and its evaluation pass.
+        """
+        train_losses = self.train_one_epoch()
+        val_losses = self.evaluate()
+        # save the losses
+        self.losses.append({
+            "train_losses": train_losses,
+            "val_losses": val_losses
+        })
         self.scheduler.step()
-
-        if val_stats["loss"] < self.best_val_loss:
-            self.best_val_loss = val_stats["loss"]
+        # save the best loss each time
+        if val_losses["loss"] < self.best_val_loss:
+            self.best_val_loss = val_losses["loss"]
             self.last_was_best = True
         else:
             self.last_was_best = False
-
         self.epoch += 1
-
-        return train_stats, val_stats
+        return train_losses, val_losses
 
     def resume(self, checkpoint_path: Path):
         if not checkpoint_path.exists():
@@ -146,26 +167,30 @@ class Trainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),
                 "val_loss": self.best_val_loss,
-                "hyperparameters": self.configuration
+                "losses": self.losses,
+                "model_configuration": self.model_config.to_json(finetune=self.finetune),
+                "dataset_configuration": self.dataset_config.to_json()
             },
             save_path,
         )
 
 
 def format_stats(stats: Dict[str, float]):
+    """
+    Format the loss statistics to display to the user.
+    """
     parts = [
         f"loss={stats.get('loss', 0.0):.4f}",
         f"ce={stats.get('loss_ce', 0.0):.4f}",
-        f"btn={stats.get('loss_button', 0.0):.4f}",
+        f"pair={stats.get('loss_pair', 0.0):.4f}",
     ]
-
-    if "loss_attn" in stats:
-        parts.append(f"attn={stats['loss_attn']:.4f}")
-
     return "(" + ", ".join(parts) + ")"
 
 
 def load_weights(model, weights: Path, device):
+    """
+    Load the weights from a given .pt file.
+    """
     if not weights.exists():
         raise FileNotFoundError(f"Checkpoint not found: {weights}")
     checkpoint = torch.load(weights, map_location=device)
@@ -194,13 +219,8 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     dataset_config.load() # builds cache
     train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
     sizes = (512,)
-    train_dataset.transform = TrainingTransform(sizes)
-    val_dataset.transform = ValidationTransform(512)
-
-    configuration = {
-        "MODEL_CONFIG": model_config.to_json(finetune=finetune),
-        "DATASET_CONFIG": dataset_config.to_json(),
-    }
+    train_dataset.transform = TrainingTransform(sizes) # type: ignore
+    val_dataset.transform = ValidationTransform(512) # type: ignore
 
     # create the data loaders
     loader_generator = torch.Generator()
@@ -230,16 +250,26 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     print(f"# model built and loaded to '{device}'")
     # if finetuning, then load the weights
     if finetune:
-        load_weights(model, parameters.weights, device)
+        load_weights(model, parameters.weights, device) # type: ignore
         freeze_backbone(model)
 
+    # display statistics over the number of parameters
     total_params = sum(p.numel() for p in model.parameters())
     total_params_backbone = sum(p.numel() for p in model.backbone.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
     print("# Number of parameters:", total_params)
     print("# Number of parameters of the backbone:", total_params_backbone)
     print("# Trainable parameters:", trainable_params)
+    # display statistics over the number of images in the dataset
+    train_dataset_length = len(train_dataset)
+    validation_dataset_length = len(val_dataset)
+    test_dataset_length = len(test_dataset)
+    total_dataset_length = train_dataset_length + validation_dataset_length + test_dataset_length
+    train_ratio = train_dataset_length / total_dataset_length
+    val_ratio = validation_dataset_length / total_dataset_length
+    test_ratio = test_dataset_length / total_dataset_length
+    print(f"$ train={train_dataset_length}, validation={validation_dataset_length}, test={test_dataset_length}")
+    print(f"$   --> {train_ratio:.2f}/{val_ratio:.2f}/{test_ratio:.2f}")
 
     matcher = HungarianMatcher(
         cost_class=parameters.cost_class,
@@ -278,7 +308,9 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         device=device,
         dataloader=train_loader,
         val_dataloader=val_loader,
-        configuration=configuration
+        model_config=model_config,
+        dataset_config=dataset_config,
+        finetune=finetune
     )
     return trainer
 
