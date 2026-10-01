@@ -9,6 +9,14 @@ class Event:
         self._listeners = []
         self._name = name
 
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @classmethod
+    def forward(cls, other: "Event") -> "ForwardEvent":
+        return ForwardEvent(other)
+
     def add_listener(self, listener: Any):
         self._listeners.append(listener)
 
@@ -29,3 +37,13 @@ class AnyEvent(Event):
 
     def _received(self, *args, **kwargs):
         self.fire(*args, **kwargs)
+
+
+class ForwardEvent(Event):
+    def __init__(self, other: Event):
+        super().__init__(other.name)
+        self._other = other
+        self._other.add_listener(self._forward)
+
+    def _forward(self, *args, **kwargs):
+        return self.fire(*args, **kwargs)

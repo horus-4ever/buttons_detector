@@ -1,10 +1,13 @@
 from typing import Iterable, Iterator
+
+from visualize.inference import Inference
 from .utils import Event
 from pathlib import Path
 import torch
 import random
 from model.prtr import build_model
 from model.config import ModelConfig
+from PIL import Image
 
 
 
@@ -30,20 +33,25 @@ class Application:
     def __init__(self, device = None):
         self.loss_graph_frame = GraphFrame()
         self.eval_graph_frame = GraphFrame()
+        self.device = device or torch.device("cpu")
+        self.inference = None
+        # define an event when the model is loaded
+        self.model_loaded = Event("model_loaded")
+        self.inference_frame = InferenceFrame(self)
         self.frame_manager = FrameManager(
             frames={
                 "loss_graph": self.loss_graph_frame,
-                "eval_graph": self.eval_graph_frame
+                "eval_graph": self.eval_graph_frame,
+                "inference_frame": self.inference_frame
             },
             active_frame="loss_graph"
         )
-        self.device = device or torch.device("cpu")
-        # self.open(Path("good_runs/good_run_8.pt"), device=device)
 
     def open(self, weights_path: Path):
         self.checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
-        # self._load_model(self.checkpoint)
+        self._load_model(self.checkpoint)
         self._create_graph(self.checkpoint)
+        self.inference = Inference(self.model, self.device)
 
     def _load_model(self, checkpoint):
         model_configuration = ModelConfig.from_json(self.checkpoint["model_configuration"])
@@ -51,9 +59,10 @@ class Application:
         self.model.load_state_dict(self.checkpoint["model_state_dict"])
         self.model.to(self.device)
         self.model.eval()
+        self.model_loaded.fire()
 
     def _create_graph(self, checkpoint):
-        losses = dummy_data() # checkpoint["losses"]
+        losses = checkpoint["losses"]
         losses = self._format_data(losses)
         graph = Graph(losses)
         self.frame_manager["loss_graph"].set_graph(graph)
@@ -61,6 +70,7 @@ class Application:
     def _format_data(self, losses: list[dict]):
         result = {}
         for data_point in losses:
+            data_point = data_point["train_losses"]
             for k, v in data_point.items():
                 if k not in result:
                     result[k] = []
@@ -163,3 +173,28 @@ class Graph:
     def __init__(self, data: dict | None = None):
         self.data = data or {}
         self.toggles = CurveToogleSet(list(self.data.keys()))
+
+
+class InferenceFrame:
+    def __init__(self, application: Application):
+        self.application = application
+        self.image = None
+        self.out_img = None
+        self.out_attn = None
+        # define the event
+        self.changed = Event("changed")
+        self.model_loaded = Event.forward(self.application.model_loaded)
+        self.image_opened = Event("image_opened")
+
+    @property
+    def inference(self) -> Inference | None:
+        return self.application.inference
+
+    def _load_image(self, path: Path):
+        image_path = path
+        image = Image.open(image_path).convert("RGB")
+        return image
+
+    def open_image(self, path: Path):
+        self.image = self._load_image(path)
+        self.image_opened.fire()

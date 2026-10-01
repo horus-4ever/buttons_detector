@@ -72,7 +72,7 @@ class TrainingParameters:
             "num_workers": self.num_workers,
             "seed": self.seed,
             "cost_class": self.cost_class,
-            "cost_coord": self.cost_coord,
+            "cost_l1": self.cost_coord,
             "cost_giou": self.cost_giou
         }
 
@@ -87,7 +87,7 @@ class TrainingParameters:
             num_workers=data["num_workers"],
             seed=data["seed"],
             cost_class=data["cost_class"],
-            cost_coord=data["cost_coord"],
+            cost_coord=data["cost_l1"],
             cost_giou=data["cost_giou"]
         )
 
@@ -96,10 +96,15 @@ class TrainingParameters:
 class FinetuneParameters(TrainingParameters):
     weights: Path
 
+    def to_json(self):
+        result = TrainingParameters.to_json(self)
+        result["weights"] = self.weights
+        return result
+
     @classmethod
     def from_json(cls, data):
         object = TrainingParameters.from_json(data)
-        object.weights = Path(data["weights"])
+        # object.weights = Path(data["weights"])
         return object
 
 

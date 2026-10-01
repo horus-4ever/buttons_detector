@@ -17,7 +17,7 @@ class TrainingTransform(Transform):
             RandomSafeErasing(p=0.6),
             RandomFastenerPartMasking(
                 p=0.3,
-                target_fastener_types=("velcro",),
+                target_counterpart_types=("velcro",),
                 min_width=0.05,
                 max_width=0.20,
                 min_height=0.05,

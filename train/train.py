@@ -67,11 +67,11 @@ class Trainer:
     def _annotations_to_tensor(self, annotations: list[Annotation], device):
         targets = []
         for annotation in annotations:
-            classes, coord_buttons, coord_fasteners, *_ = annotation.to_tensor(device=device)
+            classes, coord_buttons, coord_counterparts, *_ = annotation.to_tensor(device=device)
             targets.append({
                 "labels": classes,
                 "buttons": coord_buttons,
-                "keypoints": coord_fasteners
+                "counterparts": coord_counterparts
             })
         return targets
 
@@ -281,9 +281,9 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         num_classes=1,
         matcher=matcher,
         weight_dict={
-            "loss_ce": parameters.cost_class,
-            "loss_button": parameters.cost_coord,
-            "loss_giou": parameters.cost_giou
+            "cost_ce": parameters.cost_class,
+            "cost_l1": parameters.cost_coord,
+            "cost_giou": parameters.cost_giou
         },
         eos_coef=0.1,
     ).to(device)

@@ -139,7 +139,7 @@ class SetCriterion(nn.Module):
             target_classes, # [B, Q]
             weight=self.empty_weight, # type: ignore
         )
-        return {"loss_ce": loss_ce}
+        return {"ce_loss": loss_ce}
 
     def pair_loss(self, outputs, targets, indices):
         """
@@ -239,9 +239,9 @@ class SetCriterion(nn.Module):
         losses.update(self.pair_loss(outputs, targets, indices))
         # the total loss is the weighted sum of the losses
         total_loss = (
-            losses["class_loss"] * self.weight_dict["class_loss"] +
-            losses["L1_loss_pair"] * self.weight_dict["L1_loss"] +
-            losses["GIoU_loss_pair"] * self.weight_dict["GIoU_loss"]
+            losses["ce_loss"] * self.weight_dict["cost_ce"] +
+            losses["L1_loss_pair"] * self.weight_dict["cost_l1"] +
+            losses["GIoU_loss_pair"] * self.weight_dict["cost_giou"]
         )
         losses["loss"] = total_loss
         return losses

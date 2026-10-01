@@ -1,7 +1,8 @@
 from pathlib import Path
 from tkinter import ttk
 import tkinter as tk
-from .model import Graph, CurveToogle, CurveToogleSet, Application, FrameManager, GraphFrame
+from PIL import ImageTk
+from .model import Graph, CurveToogle, CurveToogleSet, Application, FrameManager, GraphFrame, InferenceFrame
 from .filedialog import FileDialog
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -93,6 +94,73 @@ class GraphFrameView(ttk.Frame):
         view.pack(fill="both", expand=True)
 
 
+class InferenceFrameView(ttk.Frame):
+    def __init__(self, inference_frame: InferenceFrame, master = None):
+        super().__init__(master=master)
+        self.inference_frame = inference_frame
+        self.display_image = None
+        self.image_tk = None
+        self.inference_results = None
+        self._create_widgets()
+        # link events
+        self.inference_frame.model_loaded.add_listener(self._on_model_loaded)
+        self.inference_frame.image_opened.add_listener(self._on_image_opened)
+
+    def _create_widgets(self):
+        self.open_frame = ttk.Frame(self)
+        open_button = ttk.Button(self.open_frame, text="Open Image", command=self._open_image)
+        open_button.pack()
+        self.image_label = ttk.Label(self.open_frame)
+        self.image_label.pack()
+        self.run_inference_button = ttk.Button(self.open_frame, text="Predict", command=self._run_inference)
+        self.run_inference_button.pack()
+        self.run_inference_button.configure(state=tk.DISABLED)
+
+        self.results_frame = ttk.Frame(self)
+        self.prediction_label = ttk.Label(self.results_frame)
+        self.prediction_label.pack()
+        # now pack the frames
+        self.open_frame.pack(side="left")
+        self.results_frame.pack(side="right")
+
+    def _open_image(self):
+        image_filename = FileDialog.open_file()
+        if image_filename is None:
+            return
+        image_filename = Path(image_filename)
+        self.inference_frame.open_image(image_filename)
+
+    def _on_image_opened(self):
+        if self.inference_frame.image is None:
+            raise ValueError("The image could not be loaded.")
+        self.display_image = self.inference_frame.image.resize((512, 512))
+        self.image_tk = ImageTk.PhotoImage(self.display_image)
+        self.image_label.configure(image=self.image_tk)
+        if self.inference_frame.inference is not None:
+            self.run_inference_button.configure(state=tk.NORMAL)
+
+    def _run_inference(self):
+        if self.inference_frame.image is None:
+            return # no image loaded
+        if self.inference_frame.inference is None:
+            return # no model loaded
+        self.inference_results = self.inference_frame.inference.run_one(self.inference_frame.image)
+        self._draw_results()
+
+    def _on_model_loaded(self):
+        if self.display_image is None:
+            return
+        self.run_inference_button.configure(state=tk.NORMAL)
+
+    def _draw_results(self):
+        if self.inference_results is None:
+            return
+        self.prediction_image = self.inference_results.prediction_image
+        self.prediction_image_tk = ImageTk.PhotoImage(self.prediction_image)
+        self.prediction_label.configure(image=self.prediction_image_tk)
+        
+
+
 class FrameManagerView(ttk.Notebook):
     def __init__(self, frame_manager: FrameManager, master = None):
         super().__init__(master=master)
@@ -104,6 +172,8 @@ class FrameManagerView(ttk.Notebook):
             view = None
             if isinstance(frame, GraphFrame):
                 view = GraphFrameView(frame, master=self)
+            elif isinstance(frame, InferenceFrame):
+                view = InferenceFrameView(frame, master=self)
             if view is None:
                 raise ValueError(f"Frame is of type {type(frame)}, which is not a valid type.")
             self.add(view, text=name)
