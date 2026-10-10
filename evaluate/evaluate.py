@@ -1,28 +1,17 @@
 import abc
-import argparse
-import json
 import math
-import numpy as np
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Iterable, Optional, override
+from typing import Any, override
 
-import matplotlib.pyplot as plt
 import torch
-import torch.nn.functional as F
-from PIL import Image, ImageDraw
-from torchvision import transforms
+from PIL import Image
 from torchvision.ops import box_convert, box_iou
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
-from mpl_toolkits.axes_grid1 import ImageGrid
 from dataformat.dataformat import *
 from dataformat.dataformat import Annotation
 from dataformat.dataset import DatasetConfig
 from train.transforms import ValidationTransform
 from train.commons import collate_fn
-
-from model.prtr import build_model_from
-from model.utils import load_weights, compute_iou, compute_pair_iou
 
 
 class PairWrapper:
@@ -63,29 +52,23 @@ class Prediction:
 
     @classmethod
     def from_outputs(cls, outputs: dict, image_id) -> list["Prediction"]:
-        pred_boxes = outputs["pred_boxes"].detach() # [B, Q, RpQ, 4]
-        probs = outputs["pred_logits"].softmax(-1).detach() # [B, Q, num_classes+1]
-        predicted_classes = probs.argmax(dim=-1)  # [B, Q]
-        B, *_ = pred_boxes.size()
+        pred_boxes = outputs["pred_boxes"].detach().cpu() # [B, Q, RpQ, 4]
+        probs = outputs["pred_logits"].softmax(-1).detach().cpu() # [B, Q, num_classes+1]
+        assert pred_boxes.shape[0] == 1, "Only batch size 1 is supported"
         # get the boxes with the right classes only
-        scores = probs[..., 0] # [B, Q]
-        object_boxes_indices = (predicted_classes == 0) # [B, Q]
-        no_object_indices = (predicted_classes == 1)
-        confidence = scores
-        object_boxes = pred_boxes[object_boxes_indices] # [Q, RpQ, 4]
+        confidence = probs[0, ..., 0] # [Q]
+        object_boxes = pred_boxes[0] # [Q, RpQ, 4]
         # for each prediction of the batch
-        Q, *_ = object_boxes.size()
         predictions = []
-        for b in range(B):
-            for q in range(Q):
-                button_box, counterpart_box = object_boxes[q] # [RpQ, 4]
-                prediction = cls(
-                    button_box=button_box,
-                    counterpart_box=counterpart_box,
-                    confidence=confidence[b][q],
-                    image_id=image_id
-                )
-                predictions.append(prediction)
+        for conf, pred in zip(confidence, object_boxes):
+            button_box, counterpart_box = pred # [RpQ, 4]
+            prediction = cls(
+                button_box=button_box,
+                counterpart_box=counterpart_box,
+                confidence=conf.item(),
+                image_id=image_id
+            )
+            predictions.append(prediction)
         return predictions
 
 
@@ -155,8 +138,7 @@ class Evaluation(abc.ABC):
         result = []
         for predicton in predictions:
             if predicton.confidence >= threshold:
-                continue
-            result.append(predicton)
+                result.append(predicton)
         return result
 
     def sort_by_confidence(self, predictions: list[Prediction], ascending: bool = True):
@@ -169,41 +151,58 @@ class Evaluation(abc.ABC):
 class PairIoUEvaluation(Evaluation):
     def __init__(self, iou_threshold: float):
         self.iou_threshold = iou_threshold
+        self.AP = 0.0
+        self.overall = Metric.empty()
 
-    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]) -> Metric:
-        # keep only the predictions whose confidence is above the threshold
-        predictions = self.filter_confidence(predictions, 0.5)
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
         # sort by highest confidence order
         predictions = self.sort_by_confidence(predictions, ascending=False)
         matched = torch.zeros(len(annotations), dtype=torch.bool)
-        for prediction in predictions:
+        nb_ground_truths = len(annotations)
+        # compute the AP based on greedy matching
+        AP = 0.0
+        previous_recall = 0.0
+        for n, prediction in enumerate(predictions):
+            # get the annotations corresponding to the image of the prediction
+            image_ann_indices = torch.tensor([index for index, pair in enumerate(annotations) if pair.image_id == prediction.image_id])
+            pred_annotations = [pair for pair in annotations if pair.image_id == prediction.image_id]
+            if not pred_annotations: # no ground truth for this image, we skip it
+                continue
             # get the button and counterpart bboxes (single tensor)
             pred_button_bbox = prediction.button_box # [4]
             pred_counterpart_bbox = prediction.counterpart_box # [4]
             # get the ground truth button and counterpart IoU (list of tensors)
-            gt_button_bboxes = torch.stack([pair.button.bbox.to_tensor() for pair in annotations]) # [num_gt, 4]
-            gt_counterpart_bboxes = torch.stack([pair.counterpart.bbox.to_tensor() for pair in annotations]) # [num_gt, 4]
+            gt_button_bboxes = torch.stack([pair.button.bbox.to_tensor() for pair in pred_annotations]) # [num_gt, 4]
+            gt_counterpart_bboxes = torch.stack([pair.counterpart.bbox.to_tensor() for pair in pred_annotations]) # [num_gt, 4]
             # compute the IoU for each ground truth with the predicted button and counterpart
-            ious_button = box_iou(pred_button_bbox[None, :], gt_button_bboxes)[0] # [num_gt]
-            ious_counterpart = box_iou(pred_counterpart_bbox[None, :], gt_counterpart_bboxes)[0] # [num_gt]
-            ious_button[matched] = -1.0
-            ious_counterpart[matched] = -1.0
+            ious_button = box_iou(pred_button_bbox[None, :], gt_button_bboxes, fmt=prediction.BOX_FORMAT)[0] # [num_gt]
+            ious_counterpart = box_iou(pred_counterpart_bbox[None, :], gt_counterpart_bboxes, fmt=prediction.BOX_FORMAT)[0] # [num_gt]
+            ious_button[matched[image_ann_indices]] = -1.0
+            ious_counterpart[matched[image_ann_indices]] = -1.0
             keep = (ious_button >= self.iou_threshold) & (ious_counterpart >= self.iou_threshold)
             if not keep.any():
                 continue
             kept_together = torch.min(ious_button, ious_counterpart)
             kept_together[~keep] = -1.0
             _, best_gt_index = kept_together.max(dim=0)
-            matched[best_gt_index] = True
+            matched[image_ann_indices[best_gt_index]] = True
+            # now we compute the running AP
+            nb_matched = int(matched.sum().item())
+            nb_predictions = n + 1
+            recall = nb_matched / nb_ground_truths if nb_ground_truths > 0 else 0.0
+            precision = nb_matched / nb_predictions if nb_predictions > 0 else 0.0
+            AP += (recall - previous_recall) * precision
+            previous_recall = recall
         nb_matched = int(matched.sum().item())
         nb_predictions = len(predictions)
-        nb_ground_truths = len(annotations)
-        return Metric(
+        self.overall = Metric(
             TP=nb_matched,
             TN=0,
             FP=nb_predictions - nb_matched,
             FN=nb_ground_truths - nb_matched
         )
+        self.AP = AP
+        return self
 
 
 class PairDistanceEvaluation(Evaluation):
@@ -219,8 +218,9 @@ class PairDistanceEvaluation(Evaluation):
         - match the prediction to the closest ground truth annotation (max then argmin)
     """
 
-    def __init__(self, distance_threshold: float):
+    def __init__(self, distance_threshold: float, image_size: int = 512):
         self.distance_threshold = distance_threshold
+        self.image_size = image_size
         self.AP = 0.0
         self.overall = Metric.empty()
 
@@ -250,18 +250,18 @@ class PairDistanceEvaluation(Evaluation):
                 pred_button_center.unsqueeze(0) - gt_button_centers,
                 dim=1
             ) # [num_gt]
-            distance_fastener = torch.linalg.vector_norm(
+            distance_counterpart = torch.linalg.vector_norm(
                 pred_counterpart_center.unsqueeze(0) - gt_counterpart_centers,
                 dim=1
             ) # [num_gt]
             # already matched ground truths should be ignored (set to infinity)
             distance_button[matched[image_ann_indices]] = math.inf
-            distance_fastener[matched[image_ann_indices]] = math.inf
+            distance_counterpart[matched[image_ann_indices]] = math.inf
             # match only if both distances for the button and the counterpart are below the threshold
-            keep = (distance_button <= self.distance_threshold) & (distance_fastener <= self.distance_threshold)
+            keep = (distance_button <= self.distance_threshold / self.image_size) & (distance_counterpart <= self.distance_threshold / self.image_size)
             if not keep.any():
                 continue
-            kept_together = torch.max(distance_button, distance_fastener)
+            kept_together = torch.max(distance_button, distance_counterpart)
             kept_together[~keep] = math.inf
             _, best_gt_index = kept_together.min(dim=0)
             matched[image_ann_indices[best_gt_index]] = True
@@ -281,17 +281,81 @@ class PairDistanceEvaluation(Evaluation):
             FN=nb_ground_truths - nb_matched
         )
         self.AP = AP
+        return self
+
+
+class PairIoUAllEvaluation(Evaluation):
+    def __init__(self):
+        self.AP_50 = 0.0
+        self.AP_75 = 0.0
+        self.AP_90 = 0.0
+        self.AP = 0.0
+
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper], confidence_threshold: float = 0.0):
+        predictions = self.filter_confidence(predictions, confidence_threshold)
+        ap_50_evaluator = PairIoUEvaluation(iou_threshold=0.5)
+        ap_75_evaluator = PairIoUEvaluation(iou_threshold=0.75)
+        ap_90_evaluator = PairIoUEvaluation(iou_threshold=0.9)
+        self.AP_50 = ap_50_evaluator.evaluate(predictions, annotations).AP
+        self.AP_75 = ap_75_evaluator.evaluate(predictions, annotations).AP
+        self.AP_90 = ap_90_evaluator.evaluate(predictions, annotations).AP
+        self.AP = (self.AP_50 + self.AP_75 + self.AP_90) / 3
+        return self
+
+    def results(self):
+        return {
+            "AP_50": self.AP_50,
+            "AP_75": self.AP_75,
+            "AP_90": self.AP_90,
+            "AP": self.AP
+        }
+
+
+
+class PairDistanceAllEvaluation(Evaluation):
+    def __init__(self):
+        self.AP_1 = 0.0
+        self.AP_3 = 0.0
+        self.AP_5 = 0.0
+        self.AP_10 = 0.0
+
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper], confidence_threshold: float = 0.0):
+        predictions = self.filter_confidence(predictions, confidence_threshold)
+        ap_1_evaluator = PairDistanceEvaluation(distance_threshold=1.0)
+        ap_3_evaluator = PairDistanceEvaluation(distance_threshold=3.0)
+        ap_5_evaluator = PairDistanceEvaluation(distance_threshold=5.0)
+        ap_10_evaluator = PairDistanceEvaluation(distance_threshold=10.0)
+        self.AP_1 = ap_1_evaluator.evaluate(predictions, annotations).AP
+        self.AP_3 = ap_3_evaluator.evaluate(predictions, annotations).AP
+        self.AP_5 = ap_5_evaluator.evaluate(predictions, annotations).AP
+        self.AP_10 = ap_10_evaluator.evaluate(predictions, annotations).AP
+        self.AP = (self.AP_1 + self.AP_3 + self.AP_5 + self.AP_10) / 4
+        return self
+
+    def results(self):
+        return {
+            "AP": self.AP,
+            "AP_1": self.AP_1,
+            "AP_3": self.AP_3,
+            "AP_5": self.AP_5,
+            "AP_10": self.AP_10
+        }
 
 
 class Evaluator:
     def __init__(self, model, dataset: DatasetConfig, threshold: float, device):
+        """
+        Evaluator class that evaluates a model on a given dataset.
+        The threshold defined is the confidence threshold for the predictions to be considered in the evaluation.
+        This threshold is meant to reflect actual production usage.
+        """
         self.model = model
         self.dataset = dataset
         self.threshold = threshold
         self.device = device
 
     def run_one(self, annotation: Annotation):
-        image_root = self.dataset.images_dir
+        image_root = self.dataset.dataset_root / "images"
         image = Image.open(image_root / annotation.image.url)
         transform = ValidationTransform(512)
         image, annotation = transform(image, annotation)
@@ -303,50 +367,8 @@ class Evaluator:
         outputs = self.model(images, masks)
         return outputs
 
-    def fastener_recall(self, pred_boxes, pred_scores, gt_boxes, gt_visible, iou_threshold=0.5):
-        """
-        pred_scores: [Q]
-        """
-        keep = pred_scores >= self.threshold
-        pred_boxes = pred_boxes[keep]
-        pred_scores = pred_scores[keep]
-        # get the number of ground truth
-        n_gt = gt_boxes.shape[0]
-        visible_total = int(gt_visible.sum().item())
-        occluded_total = int((~gt_visible).sum().item())
-        # compute the IoU
-        pred_xyxy = box_convert(
-            pred_boxes,
-            in_fmt="cxcywh",
-            out_fmt="xyxy",
-        )
-        gt_xyxy = box_convert(
-            gt_boxes,
-            in_fmt="cxcywh",
-            out_fmt="xyxy",
-        )
-        ious = box_iou(pred_xyxy, gt_xyxy) # [num_pred, num_gt]
-        order = pred_scores.argsort(descending=True) # [num_pred]
-        # define a tensor for the matched one, so that we don't reuse them
-        gt_matched = torch.zeros(n_gt, dtype=torch.bool)
-        # we loop for each predictions to match to a ground truth
-        for i in order: # we match in order of confidence, from the highest confidence
-            pred_ious = ious[i].clone() # [num_gt]
-            pred_ious[gt_matched] = -1.0
-            best_iou, best_gt_index = pred_ious.max(dim=0) # take the best iou and its index
-            if best_iou >= iou_threshold:
-                gt_matched[best_gt_index] = True
-        # now we want the visibility
-        visible_tp = int((gt_matched & gt_visible).sum().item())
-        occluded_tp = int((gt_matched & (~gt_visible)).sum().item())
-        return visible_tp, occluded_tp, visible_total, occluded_total
-
-    def evaluate(self, threshold: float):
-        val_dataset = dataset.validation_annotations
-        mAP_buttons = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
-        mAP_counterparts = MeanAveragePrecision(box_format="cxcywh", iou_type="bbox", class_metrics=True)
-        pair_distance_evaluator = PairDistanceEvaluation(distance_threshold=5.0)
-        pair_iou_evaluator = PairIoUEvaluation(iou_threshold=0.5)
+    def evaluate(self):
+        val_dataset = self.dataset.validation_annotations
         # collect all pairs in a list
         all_pairs = []
         all_predictions = []
@@ -356,58 +378,13 @@ class Evaluator:
             all_pairs.extend([PairWrapper(pair, image_id=annotation.image.url) for pair in annotation.cloth.pairs])
             predictions = Prediction.from_outputs(outputs, image_id=annotation.image.url)
             all_predictions.extend(predictions)
-        pair_distance_mAP = pair_distance_evaluator.evaluate(all_predictions, all_pairs)
-        pair_iou_mAP = pair_iou_evaluator.evaluate(all_predictions, all_pairs)
-        mAP_buttons_result = mAP_buttons.compute()
-        mAP_counterparts_result = mAP_counterparts.compute()
+        pair_distance_mAP = PairDistanceAllEvaluation().evaluate(all_predictions, all_pairs)
+        pair_iou_mAP = PairIoUAllEvaluation().evaluate(all_predictions, all_pairs)
+        pair_distance_mAP_production = PairDistanceAllEvaluation().evaluate(all_predictions, all_pairs, confidence_threshold=self.threshold)
+        pair_iou_mAP_production = PairIoUAllEvaluation().evaluate(all_predictions, all_pairs, confidence_threshold=self.threshold)
         return (
-            mAP_buttons_result,
-            mAP_counterparts_result,
             pair_distance_mAP,
-            pair_iou_mAP
+            pair_iou_mAP,
+            pair_distance_mAP_production,
+            pair_iou_mAP_production
         )
-
-        
-
-def init_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, required=True)
-    parser.add_argument("--weights", type=str, required=True)
-    parser.add_argument("--dataset", type=str, required=True)
-    parser.add_argument("--device", type=str, required=False, default="cuda")
-    parser.add_argument("--threshold", type=float, required=False, default=0.5)
-    return parser
-
-
-if __name__ == "__main__":
-    parser = init_parser()
-    args = parser.parse_args()
-    # get the arguments
-    model_path = Path(args.model)
-    weights_path = Path(args.weights)
-    dataset_path = Path(args.dataset)
-    device_name = args.device
-    threshold = args.threshold
-    # get the device
-    device = torch.device(device_name)
-    print("Using device:", device)
-    # load the model and its weights
-    model = build_model_from(model_path)
-    model.to(device=device)
-    load_weights(model, weights=weights_path, device=device)
-    # get the dataset
-    dataset = DatasetConfig.open(config_path=dataset_path).load()
-    # now evaluate a dataset based on the dataset cache it has
-    evaluator = Evaluator(model, dataset, threshold, device)
-    mAP_buttons, mAP_fasteners, visibility_recall, occlusion_recall, total_ground_truths, average_distance_error, average_normalized_distance_error, pair_precision, pair_recall, pair_distance_precision, pair_distance_recall = evaluator.evaluate(threshold=0.5)
-
-    print("~ mAP_buttons:", mAP_buttons)
-    print("~ mAP_fasteners: ", mAP_fasteners)
-    print("~ Visibility Recall: ", visibility_recall)
-    print("~ Occlusion Recall: ", occlusion_recall)
-    print("~ Average Distance Error: ", average_distance_error)
-    print("~ Average Normalized Distance Error: ", average_normalized_distance_error)
-    print("~ Pair Precision@50: ", pair_precision)
-    print("~ Pair Recall@50: ", pair_recall)
-    print("~ Pair Distance Precision@5: ", pair_distance_precision)
-    print("~ Pair Distance Recall@5: ", pair_distance_recall)
