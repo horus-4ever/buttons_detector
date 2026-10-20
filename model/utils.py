@@ -83,7 +83,7 @@ def load_weights(model, weights: Path, device):
     """
     if not weights.exists():
         raise FileNotFoundError(f"Checkpoint not found: {weights}")
-    checkpoint = torch.load(weights, map_location=device)
+    checkpoint = torch.load(weights, map_location=device, weights_only=False)
     if "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
     else:
