@@ -90,6 +90,15 @@ def load_weights(model, weights: Path, device):
         model.load_state_dict(checkpoint)
 
 
+def freeze_backbone(model):
+    """
+    Freezes the backbone of the model.
+    """
+    for p in model.backbone.body.parameters():
+        p.requires_grad = False
+    model.backbone.eval()
+
+
 def compute_intersect(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     """
     Computes the intersection area between two boxes.

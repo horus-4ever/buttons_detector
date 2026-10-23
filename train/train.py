@@ -11,10 +11,12 @@ from torchvision import transforms as T
 from model.prtr import PRTR, build_model
 from model.criterion import HungarianMatcher, SetCriterion
 from model.config import ModelConfig
-from model.utils import load_weights
-from dataformat.dataset import DatasetConfig, Annotation
-from train.transforms import TrainingTransform, ValidationTransform
+from model.utils import load_weights, freeze_backbone
+from dataformat.dataset import DatasetConfig
+from .transforms import TrainingTransform, ValidationTransform
 from .commons import collate_fn
+from .evaluator import get_evaluator
+from .trainer import Trainer
 
 
 def seed_worker(worker_id: int):
@@ -24,155 +26,6 @@ def seed_worker(worker_id: int):
     """
     worker_seed = torch.initial_seed() % 2**32
     random.seed(worker_seed)
-
-
-class Trainer:
-    def __init__(
-            self,
-            model,
-            criterion,
-            optimizer,
-            scheduler,
-            device,
-            dataloader,
-            val_dataloader,
-            model_config: ModelConfig,
-            dataset_config: DatasetConfig,
-            finetune: bool
-        ):
-        self.model = model
-        self.criterion = criterion
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.device = device
-        self.val_dataloader = val_dataloader
-        self.dataloader = dataloader
-        self.model_config = model_config
-        self.dataset_config = dataset_config
-        self.finetune = finetune
-        self.epoch = 0
-        self.losses = [] # save losses over epochs
-        self.best_val_loss = float("inf")
-        self.last_was_best = False
-
-    def _accumulate_losses(self, running: Dict[str, float], losses: Dict[str, torch.Tensor]):
-        for k, v in losses.items():
-            running[k] = running.get(k, 0.0) + float(v.item())
-
-    def _mean_losses(self, running: Dict[str, float], n: int):
-        if n == 0:
-            raise RuntimeError("Dataloader produced zero batches.")
-        return {k: v / n for k, v in running.items()}
-    
-    def _annotations_to_tensor(self, annotations: list[Annotation], device):
-        targets = []
-        for annotation in annotations:
-            classes, coord_buttons, coord_counterparts, *_ = annotation.to_tensor(device=device)
-            targets.append({
-                "labels": classes,
-                "buttons": coord_buttons,
-                "counterparts": coord_counterparts
-            })
-        return targets
-
-    def train_one_epoch(self):
-        self.model.train()
-        self.criterion.train()
-        self.model.backbone.body.eval() # freeze the backbone
-        # store the accumulated losses
-        running: Dict[str, float] = {}
-        # epoch main loop
-        for images, padding_mask, annotations, (W, H) in self.dataloader:
-            # annotations: b * Annotation
-            images = images.to(self.device, non_blocking=True)
-            padding_mask = padding_mask.to(self.device, non_blocking=True)
-            # now transform the targets into tensors
-            targets = self._annotations_to_tensor(annotations, device=self.device)
-            # inference of the batch
-            outputs = self.model(images, padding_mask)
-            losses = self.criterion(outputs, targets)
-
-            self.optimizer.zero_grad(set_to_none=True)
-            losses["loss"].backward() # backward propagation on the global loss
-            self.optimizer.step()
-            # accumulate the losses stored in the `losses` dict
-            self._accumulate_losses(running, losses)
-        # compute and return the mean of the losses over all batches
-        nb_batches = len(self.dataloader)
-        mean_losses = self._mean_losses(running, nb_batches)
-        return mean_losses
-
-    @torch.no_grad()
-    def evaluate(self):
-        self.model.eval()
-        self.criterion.eval()
-
-        running: Dict[str, float] = {}
-        # evaluation main loop
-        for images, padding_mask, annotations, (W, H) in self.val_dataloader:
-            images = images.to(self.device, non_blocking=True)
-            padding_mask = padding_mask.to(self.device, non_blocking=True)
-            # now transform the targets into tensors
-            targets = self._annotations_to_tensor(annotations, device=self.device)
-            outputs = self.model(images, padding_mask)
-            losses = self.criterion(outputs, targets)
-            self._accumulate_losses(running, losses)
-        nb_batches = len(self.val_dataloader)
-        mean_losses = self._mean_losses(running, nb_batches)
-        return mean_losses
-
-    def step(self):
-        """
-        Perform one training epoch and its evaluation pass.
-        """
-        train_losses = self.train_one_epoch()
-        val_losses = self.evaluate()
-        # save the losses
-        self.losses.append({
-            "train_losses": train_losses,
-            "val_losses": val_losses
-        })
-        self.scheduler.step()
-        # save the best loss each time
-        if val_losses["loss"] < self.best_val_loss:
-            self.best_val_loss = val_losses["loss"]
-            self.last_was_best = True
-        else:
-            self.last_was_best = False
-        self.epoch += 1
-        return train_losses, val_losses
-
-    def resume(self, checkpoint_path: Path):
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-
-        saved_epoch = checkpoint.get("epoch", None)
-        if saved_epoch is None:
-            raise RuntimeError("The checkpoint does not contain an 'epoch' field.")
-
-        self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-
-        self.epoch = saved_epoch
-        self.best_val_loss = checkpoint.get("val_loss", float("inf"))
-
-    def save_checkpoint(self, save_path: Path):
-        torch.save(
-            {
-                "epoch": self.epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "val_loss": self.best_val_loss,
-                "losses": self.losses,
-                "model_configuration": self.model_config.to_json(finetune=self.finetune),
-                "dataset_configuration": self.dataset_config.to_json()
-            },
-            save_path,
-        )
 
 
 def format_stats(stats: Dict[str, float]):
@@ -186,24 +39,6 @@ def format_stats(stats: Dict[str, float]):
     ]
     return "(" + ", ".join(parts) + ")"
 
-
-def load_weights(model, weights: Path, device):
-    """
-    Load the weights from a given .pt file.
-    """
-    if not weights.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {weights}")
-    checkpoint = torch.load(weights, map_location=device)
-    if "model_state_dict" in checkpoint:
-        model.load_state_dict(checkpoint["model_state_dict"])
-    else:
-        model.load_state_dict(checkpoint)
-
-
-def freeze_backbone(model):
-    for p in model.backbone.body.parameters():
-        p.requires_grad = False
-    model.backbone.eval()
 
 def init_trainer(model_config: ModelConfig, finetune: bool):
     parameters = model_config.training_parameters if not finetune else model_config.finetune_parameters
@@ -221,6 +56,7 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     sizes = (512,)
     train_dataset.transform = TrainingTransform(sizes) # type: ignore
     val_dataset.transform = ValidationTransform(512) # type: ignore
+    test_dataset.transform = ValidationTransform(512) # type: ignore
 
     # create the data loaders
     loader_generator = torch.Generator()
@@ -237,7 +73,16 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=parameters.batch_size,
+        batch_size=1,
+        shuffle=False,
+        num_workers=parameters.num_workers,
+        collate_fn=collate_fn,
+        pin_memory=(device.type == "cuda"),
+        worker_init_fn=seed_worker,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=1,
         shuffle=False,
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
@@ -300,6 +145,8 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         gamma=0.1,
     )
 
+    evaluator = get_evaluator(threshold=0.9)
+
     trainer = Trainer(
         model=model,
         criterion=criterion,
@@ -308,9 +155,11 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         device=device,
         dataloader=train_loader,
         val_dataloader=val_loader,
+        test_dataloader=test_loader,
         model_config=model_config,
         dataset_config=dataset_config,
-        finetune=finetune
+        finetune=finetune,
+        evaluator=evaluator
     )
     return trainer
 
@@ -329,7 +178,7 @@ def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weig
     # training loop
     for epoch in range(start_epoch, start_epoch + num_epochs):
         # step one epoch of the trainer
-        train_stats, val_stats = trainer.step()
+        train_stats, val_stats, val_evaluation, test_evaluation = trainer.step()
         # display the epoch results
         print(
             f"Epoch [{epoch + 1}/{start_epoch + num_epochs}] | "

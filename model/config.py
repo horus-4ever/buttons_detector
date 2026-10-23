@@ -104,8 +104,19 @@ class FinetuneParameters(TrainingParameters):
     @classmethod
     def from_json(cls, data):
         object = TrainingParameters.from_json(data)
-        # object.weights = Path(data["weights"])
-        return object
+        return cls(
+            dataset=object.dataset,
+            batch_size=object.batch_size,
+            num_epochs=object.num_epochs,
+            lr=object.lr,
+            weight_decay=object.weight_decay,
+            num_workers=object.num_workers,
+            seed=object.seed,
+            cost_class=object.cost_class,
+            cost_coord=object.cost_coord,
+            cost_giou=object.cost_giou,
+            weights=Path(data["weights"])
+        )
 
 
 @dataclass
