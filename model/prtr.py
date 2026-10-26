@@ -7,7 +7,6 @@ from .backbone import MultiscaleResNet50
 from .config import ModelConfig
 from model.utils import MLP, inverse_sigmoid
 from pathlib import Path
-import json
 
 
 class PRTR(nn.Module):
@@ -60,11 +59,25 @@ class PRTR(nn.Module):
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box
         self.pred_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
+        self._reset_parameters()
 
     def train(self, mode: bool = True):
         super().train(mode)
         self.backbone.body.eval()
         return self
+    
+    def _reset_parameters(self):
+        # initialization of the prediction head
+        # targets are very small so we want to output very small boxes at first
+        # as for the initial x and y, the predictions are offsets from reference points
+        # therefore, we want x and y offsets to be null at first, or at least a small value
+        last_layer: nn.Linear = self.pred_head.layers[-1] # type: ignore
+        with torch.no_grad():
+            last_layer.weight.zero_()
+            last_layer.bias.zero_()
+            initial_value = last_layer.bias.new_tensor([0.02, 0.02]) # ~ 10 pixels
+            # the width and height are taken with a .sigmoid, so we perform a .logit here
+            last_layer.bias[2:].copy_(torch.logit(initial_value))
         
     def _compute_masks(self, masks, feature_maps):
         """

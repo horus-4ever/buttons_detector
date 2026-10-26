@@ -135,7 +135,7 @@ def compute_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     """
     intersection = compute_intersect(box1, box2)
     union = compute_union(box1, box2)
-    iou = intersection / (union + 1e-6) # add a small epsilon to avoid zero divisions
+    iou = intersection / union.clamp_min(1e-12) # add a small epsilon to avoid zero divisions
     return iou
 
 
@@ -157,7 +157,7 @@ def compute_giou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     enclosing_width = torch.clamp(x2 - x1, min=0)
     enclosing_height = torch.clamp(y2 - y1, min=0)
     enclosing_area = enclosing_width * enclosing_height
-    giou = iou - (enclosing_area - union) / (enclosing_area + 1e-6)
+    giou = iou - (enclosing_area - union) / enclosing_area.clamp_min(1e-12)
     return giou
 
 

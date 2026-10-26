@@ -184,8 +184,8 @@ class SetCriterion(nn.Module):
         """
         Compute the L1 loss.
         """
-        loss_buttons = F.l1_loss(pred_button_coords, target_button_coords, reduction="mean")
-        loss_counterparts = F.l1_loss(pred_counterpart_coords, target_counterpart_coords, reduction="mean")
+        loss_buttons = F.l1_loss(pred_button_coords, target_button_coords, reduction="none").sum(dim=-1).mean()
+        loss_counterparts = F.l1_loss(pred_counterpart_coords, target_counterpart_coords, reduction="none").sum(dim=-1).mean()
         loss_pair = loss_buttons + loss_counterparts
         return {
             "L1_loss_pair": loss_pair,
