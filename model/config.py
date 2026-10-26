@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from augmentations import get_transforms, serialize_transforms, Transform
 
 
 @dataclass
@@ -52,6 +53,7 @@ class ModelParameters:
 @dataclass
 class TrainingParameters:
     dataset: Path # path to the json file
+    finetune: Path | None # path to the base model or None
     batch_size: int
     num_epochs: int
     lr: float
@@ -61,10 +63,12 @@ class TrainingParameters:
     cost_class: float
     cost_coord: float
     cost_giou: float
+    img_size: int
 
     def to_json(self):
         return {
             "dataset": self.dataset,
+            "finetune": self.finetune,
             "batch_size": self.batch_size,
             "num_epochs": self.num_epochs,
             "lr": self.lr,
@@ -73,13 +77,15 @@ class TrainingParameters:
             "seed": self.seed,
             "cost_class": self.cost_class,
             "cost_l1": self.cost_coord,
-            "cost_giou": self.cost_giou
+            "cost_giou": self.cost_giou,
+            "img_size": self.img_size
         }
 
     @classmethod
     def from_json(cls, data):
         return cls(
             dataset=Path(data["dataset"]),
+            finetune=Path(data["finetune"]) if data["finetune"] is not None else None,
             batch_size=data["batch_size"],
             num_epochs=data["num_epochs"],
             lr=data["lr"],
@@ -88,35 +94,10 @@ class TrainingParameters:
             seed=data["seed"],
             cost_class=data["cost_class"],
             cost_coord=data["cost_l1"],
-            cost_giou=data["cost_giou"]
+            cost_giou=data["cost_giou"],
+            img_size=data["img_size"]
         )
 
-
-@dataclass
-class FinetuneParameters(TrainingParameters):
-    weights: Path
-
-    def to_json(self):
-        result = TrainingParameters.to_json(self)
-        result["weights"] = self.weights
-        return result
-
-    @classmethod
-    def from_json(cls, data):
-        object = TrainingParameters.from_json(data)
-        return cls(
-            dataset=object.dataset,
-            batch_size=object.batch_size,
-            num_epochs=object.num_epochs,
-            lr=object.lr,
-            weight_decay=object.weight_decay,
-            num_workers=object.num_workers,
-            seed=object.seed,
-            cost_class=object.cost_class,
-            cost_coord=object.cost_coord,
-            cost_giou=object.cost_giou,
-            weights=Path(data["weights"])
-        )
 
 
 @dataclass
@@ -124,15 +105,14 @@ class ModelConfig:
     name: str
     model_parameters: ModelParameters
     training_parameters: TrainingParameters
-    finetune_parameters: FinetuneParameters
+    augmentations: list[Transform]
 
-    def to_json(self, finetune: bool = False):
+    def to_json(self):
         return {
             "name": self.name,
             "model_parameters": self.model_parameters.to_json(),
-            "finetune": finetune,
-            "training_parameters": self.training_parameters.to_json(),
-            "finetune_parameters": self.finetune_parameters.to_json()
+            "training": self.training_parameters.to_json(),
+            "augmentations": serialize_transforms(self.augmentations)
         }
 
     @classmethod
@@ -140,8 +120,8 @@ class ModelConfig:
         return cls(
             name=data["name"],
             model_parameters=ModelParameters.from_json(data["model_parameters"]),
-            training_parameters=TrainingParameters.from_json(data["training_parameters"]),
-            finetune_parameters=FinetuneParameters.from_json(data["finetune_parameters"])
+            training_parameters=TrainingParameters.from_json(data["training"]),
+            augmentations=get_transforms(data["augmentations"])
         )
 
     @classmethod

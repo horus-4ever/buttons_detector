@@ -7,6 +7,7 @@ from model.config import ModelConfig
 from model.utils import load_weights, freeze_backbone
 from dataformat.dataset import DatasetConfig, Annotation
 from evaluate import Evaluator
+from train import runner
 
 
 class Trainer:
@@ -22,7 +23,6 @@ class Trainer:
             test_dataloader,
             model_config: ModelConfig,
             dataset_config: DatasetConfig,
-            finetune: bool,
             evaluator: Evaluator
         ):
         self.model = model
@@ -35,7 +35,6 @@ class Trainer:
         self.dataloader = dataloader
         self.model_config = model_config
         self.dataset_config = dataset_config
-        self.finetune = finetune
         self.epoch = 0
         self.losses = [] # save losses over epochs
         self.evaluations = [] # save evaluations over epochs
@@ -51,17 +50,6 @@ class Trainer:
         if n == 0:
             raise RuntimeError("Dataloader produced zero batches.")
         return {k: v / n for k, v in running.items()}
-    
-    def _annotations_to_tensor(self, annotations: list[Annotation], device):
-        targets = []
-        for annotation in annotations:
-            classes, coord_buttons, coord_counterparts, *_ = annotation.to_tensor(device=device)
-            targets.append({
-                "labels": classes,
-                "buttons": coord_buttons,
-                "counterparts": coord_counterparts
-            })
-        return targets
 
     def train_one_epoch(self):
         self.model.train()
@@ -71,15 +59,8 @@ class Trainer:
         running: Dict[str, float] = {}
         # epoch main loop
         for images, padding_mask, annotations, (W, H) in self.dataloader:
-            # annotations: b * Annotation
-            images = images.to(self.device, non_blocking=True)
-            padding_mask = padding_mask.to(self.device, non_blocking=True)
-            # now transform the targets into tensors
-            targets = self._annotations_to_tensor(annotations, device=self.device)
-            # inference of the batch
-            outputs = self.model(images, padding_mask)
+            outputs, targets = runner.run_one(self.model, images, padding_mask, annotations, self.device)
             losses = self.criterion(outputs, targets)
-
             self.optimizer.zero_grad(set_to_none=True)
             losses["loss"].backward() # backward propagation on the global loss
             self.optimizer.step()
@@ -97,11 +78,7 @@ class Trainer:
         running: Dict[str, float] = {}
         # evaluation main loop
         for images, padding_mask, annotations, (W, H) in self.val_dataloader:
-            images = images.to(self.device, non_blocking=True)
-            padding_mask = padding_mask.to(self.device, non_blocking=True)
-            # now transform the targets into tensors
-            targets = self._annotations_to_tensor(annotations, device=self.device)
-            outputs = self.model(images, padding_mask)
+            outputs, targets = runner.run_one(self.model, images, padding_mask, annotations, self.device)
             losses = self.criterion(outputs, targets)
             self._accumulate_losses(running, losses)
         nb_batches = len(self.val_dataloader)
@@ -177,10 +154,9 @@ class Trainer:
                 "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict(),
-                "val_loss": self.best_val_loss,
                 "losses": self.losses,
                 "evaluations": self.evaluations,
-                "model_configuration": self.model_config.to_json(finetune=self.finetune),
+                "model_configuration": self.model_config.to_json(),
                 "dataset_configuration": self.dataset_config.to_json()
             },
             save_path,

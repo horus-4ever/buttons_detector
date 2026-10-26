@@ -6,12 +6,7 @@ from torch.utils.data import Dataset
 from typing import Callable
 from PIL import Image
 from abc import ABC, abstractmethod
-
-
-class Transform(ABC):
-    @abstractmethod
-    def __call__(self, image: Image.Image, annotations: Annotation):
-        raise NotImplemented
+from augmentations import Transform
 
 
 class EmptyTransform(Transform):

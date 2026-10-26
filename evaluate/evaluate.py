@@ -4,14 +4,9 @@ from dataclasses import dataclass, field
 from typing import Any, override
 
 import torch
-from PIL import Image
-from torchvision.ops import box_convert, box_iou
-from torchmetrics.detection.mean_ap import MeanAveragePrecision
+from torchvision.ops import box_iou
 from dataformat.dataformat import *
 from dataformat.dataformat import Annotation
-from dataformat.dataset import DatasetConfig
-from train.transforms import ValidationTransform
-from train.commons import collate_fn
 
 
 class PairWrapper:
@@ -149,10 +144,20 @@ class Evaluation(abc.ABC):
 
 
 class PairIoUEvaluation(Evaluation):
+    """
+    Computes the non-interpolated AP, based on IoU metric, at a given IoU threshold.
+    Evaluation based on the IoU between predicted and ground truth bounding boxes.
+    The evaluation is based on greedy matching.
+    Given a set of predictions and a set of ground truth annotations:
+    - sort predictions by confidence (highest to lowest)
+    - for each prediction:
+        - compute the IoU to all unmatched ground truth annotations
+        - filter the predictions whose IoUs are above the threshold
+        - match the prediction to the closest ground truth annotation (max then argmax)
+    """
+    
     def __init__(self, iou_threshold: float):
         self.iou_threshold = iou_threshold
-        self.AP = 0.0
-        self.overall = Metric.empty()
 
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
         # sort by highest confidence order
@@ -195,14 +200,16 @@ class PairIoUEvaluation(Evaluation):
             previous_recall = recall
         nb_matched = int(matched.sum().item())
         nb_predictions = len(predictions)
-        self.overall = Metric(
+        overall = Metric(
             TP=nb_matched,
             TN=0,
             FP=nb_predictions - nb_matched,
             FN=nb_ground_truths - nb_matched
         )
-        self.AP = AP
-        return self
+        return {
+            "AP": AP,
+            "overall": overall
+        }
 
 
 class PairDistanceEvaluation(Evaluation):
@@ -221,8 +228,6 @@ class PairDistanceEvaluation(Evaluation):
     def __init__(self, distance_threshold: float, image_size: int = 512):
         self.distance_threshold = distance_threshold
         self.image_size = image_size
-        self.AP = 0.0
-        self.overall = Metric.empty()
 
     @override
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
@@ -274,117 +279,87 @@ class PairDistanceEvaluation(Evaluation):
             previous_recall = recall
         nb_matched = int(matched.sum().item())
         nb_predictions = len(predictions)
-        self.overall = Metric(
+        overall = Metric(
             TP=nb_matched,
             TN=0,
             FP=nb_predictions - nb_matched,
             FN=nb_ground_truths - nb_matched
         )
-        self.AP = AP
-        return self
+        return {
+            "AP": AP,
+            "overall": overall
+        }
 
 
 class PairIoUAllEvaluation(Evaluation):
-    def __init__(self):
-        self.AP_50 = 0.0
-        self.AP_75 = 0.0
-        self.AP_90 = 0.0
-        self.AP = 0.0
+    def __init__(self, confidence_threshold: float = 0.0):
+        self.confidence_threshold = confidence_threshold
 
-    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper], confidence_threshold: float = 0.0):
-        predictions = self.filter_confidence(predictions, confidence_threshold)
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        predictions = self.filter_confidence(predictions, self.confidence_threshold)
         ap_50_evaluator = PairIoUEvaluation(iou_threshold=0.5)
         ap_75_evaluator = PairIoUEvaluation(iou_threshold=0.75)
         ap_90_evaluator = PairIoUEvaluation(iou_threshold=0.9)
-        self.AP_50 = ap_50_evaluator.evaluate(predictions, annotations).AP
-        self.AP_75 = ap_75_evaluator.evaluate(predictions, annotations).AP
-        self.AP_90 = ap_90_evaluator.evaluate(predictions, annotations).AP
-        self.AP = (self.AP_50 + self.AP_75 + self.AP_90) / 3
-        return self
-
-    def results(self):
+        AP_50 = ap_50_evaluator.evaluate(predictions, annotations)["AP"]
+        AP_75 = ap_75_evaluator.evaluate(predictions, annotations)["AP"]
+        AP_90 = ap_90_evaluator.evaluate(predictions, annotations)["AP"]
+        AP = (AP_50 + AP_75 + AP_90) / 3
         return {
-            "AP_50": self.AP_50,
-            "AP_75": self.AP_75,
-            "AP_90": self.AP_90,
-            "AP": self.AP
+            "AP_50": AP_50,
+            "AP_75": AP_75,
+            "AP_90": AP_90,
+            "AP": AP
         }
 
 
 
 class PairDistanceAllEvaluation(Evaluation):
-    def __init__(self):
-        self.AP_1 = 0.0
-        self.AP_3 = 0.0
-        self.AP_5 = 0.0
-        self.AP_10 = 0.0
+    def __init__(self, confidence_threshold: float = 0.0):
+        self.confidence_threshold = confidence_threshold
 
-    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper], confidence_threshold: float = 0.0):
-        predictions = self.filter_confidence(predictions, confidence_threshold)
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        predictions = self.filter_confidence(predictions, self.confidence_threshold)
         ap_1_evaluator = PairDistanceEvaluation(distance_threshold=1.0)
         ap_3_evaluator = PairDistanceEvaluation(distance_threshold=3.0)
         ap_5_evaluator = PairDistanceEvaluation(distance_threshold=5.0)
         ap_10_evaluator = PairDistanceEvaluation(distance_threshold=10.0)
-        self.AP_1 = ap_1_evaluator.evaluate(predictions, annotations).AP
-        self.AP_3 = ap_3_evaluator.evaluate(predictions, annotations).AP
-        self.AP_5 = ap_5_evaluator.evaluate(predictions, annotations).AP
-        self.AP_10 = ap_10_evaluator.evaluate(predictions, annotations).AP
-        self.AP = (self.AP_1 + self.AP_3 + self.AP_5 + self.AP_10) / 4
-        return self
-
-    def results(self):
+        AP_1 = ap_1_evaluator.evaluate(predictions, annotations)["AP"]
+        AP_3 = ap_3_evaluator.evaluate(predictions, annotations)["AP"]
+        AP_5 = ap_5_evaluator.evaluate(predictions, annotations)["AP"]
+        AP_10 = ap_10_evaluator.evaluate(predictions, annotations)["AP"]
+        AP = (AP_1 + AP_3 + AP_5 + AP_10) / 4
         return {
-            "AP": self.AP,
-            "AP_1": self.AP_1,
-            "AP_3": self.AP_3,
-            "AP_5": self.AP_5,
-            "AP_10": self.AP_10
+            "AP_1": AP_1,
+            "AP_3": AP_3,
+            "AP_5": AP_5,
+            "AP_10": AP_10,
+            "AP": AP
         }
 
 
 class Evaluator:
-    def __init__(self, model, dataset: DatasetConfig, threshold: float, device):
+    def __init__(self):
         """
         Evaluator class that evaluates a model on a given dataset.
-        The threshold defined is the confidence threshold for the predictions to be considered in the evaluation.
-        This threshold is meant to reflect actual production usage.
         """
-        self.model = model
-        self.dataset = dataset
-        self.threshold = threshold
-        self.device = device
+        self.evaluations = {}
 
-    def run_one(self, annotation: Annotation):
-        image_root = self.dataset.dataset_root / "images"
-        image = Image.open(image_root / annotation.image.url)
-        transform = ValidationTransform(512)
-        image, annotation = transform(image, annotation)
-        images, masks, annotation, _ = collate_fn([(image, annotation)]) # type: ignore
-        images = images.to(self.device, non_blocking=True)
-        masks = masks.to(self.device, non_blocking=True)
-        # now the inference
-        self.model.eval()
-        outputs = self.model(images, masks)
-        return outputs
+    def add_evaluation(self, name: str, evaluation: Evaluation):
+        self.evaluations[name] = evaluation
 
-    def evaluate(self):
-        val_dataset = self.dataset.validation_annotations
+    def evaluate(self, outputs: list[tuple[Annotation, dict]]):
         # collect all pairs in a list
         all_pairs = []
         all_predictions = []
-        for i, annotation in enumerate(val_dataset):
-            print(f"Image [{i} / {len(val_dataset)}]", end="\r")
-            outputs = self.run_one(annotation)
+        results = {}
+        # first, we need to put the predictions in the right format
+        for i, (annotation, output) in enumerate(outputs):
+            print(f"Image [{i + 1} / {len(outputs)}]", end="\r")
             all_pairs.extend([PairWrapper(pair, image_id=annotation.image.url) for pair in annotation.cloth.pairs])
-            predictions = Prediction.from_outputs(outputs, image_id=annotation.image.url)
+            predictions = Prediction.from_outputs(output, image_id=annotation.image.url)
             all_predictions.extend(predictions)
-        pair_distance_mAP = PairDistanceAllEvaluation().evaluate(all_predictions, all_pairs)
-        pair_iou_mAP = PairIoUAllEvaluation().evaluate(all_predictions, all_pairs)
-        pair_distance_mAP_production = PairDistanceAllEvaluation().evaluate(all_predictions, all_pairs, confidence_threshold=self.threshold)
-        pair_iou_mAP_production = PairIoUAllEvaluation().evaluate(all_predictions, all_pairs, confidence_threshold=self.threshold)
-        return (
-            pair_distance_mAP,
-            pair_iou_mAP,
-            pair_distance_mAP_production,
-            pair_iou_mAP_production
-        )
+        # then, we run the evaluations
+        for name, evaluation in self.evaluations.items():
+            results[name] = evaluation.evaluate(all_predictions, all_pairs)
+        print()
+        return results

@@ -58,7 +58,7 @@ class CVATParser:
     
     def _parse_button(self, button: xml.Element) -> tuple[str, df.Button]:
         cvat_box = button
-        pair_id = button.find("attribute[@name='pair_id']").text
+        pair_id = button.find("attribute[@name='pair_id']").text # type: ignore
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         button_bbox = self._parse_bbox(cvat_box)
@@ -66,9 +66,9 @@ class CVATParser:
     
     def _parse_counterpart(self, counterpart: xml.Element) -> tuple[str, bool, df.Counterpart]:
         cvat_box = counterpart
-        pair_id = counterpart.find("attribute[@name='pair_id']").text
-        visibility = counterpart.find("attribute[@name='visible']").text == "true"
-        fastened = counterpart.find("attribute[@name='fastened']").text == "true"
+        pair_id = counterpart.find("attribute[@name='pair_id']").text # type: ignore
+        visibility = counterpart.find("attribute[@name='visible']").text == "true" # type: ignore
+        fastened = counterpart.find("attribute[@name='fastened']").text == "true" # type: ignore
         if cvat_box is None or pair_id is None:
             raise ValueError("There should be a bounding box.")
         bbox = self._parse_bbox(cvat_box)

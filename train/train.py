@@ -1,14 +1,12 @@
-import json
 import random
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any
+from typing import Dict
 
 import torch
-from PIL import Image
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import DataLoader
 from torchvision import transforms as T
 
-from model.prtr import PRTR, build_model
+from model.prtr import build_model
 from model.criterion import HungarianMatcher, SetCriterion
 from model.config import ModelConfig
 from model.utils import load_weights, freeze_backbone
@@ -19,13 +17,11 @@ from .evaluator import get_evaluator
 from .trainer import Trainer
 
 
-def seed_worker(worker_id: int):
+def seed_worker(worker_seed):
     """
     Seeds Python's random module inside each DataLoader worker.
-    PyTorch seeds workers automatically, but your custom transforms use Python random.
     """
-    worker_seed = torch.initial_seed() % 2**32
-    random.seed(worker_seed)
+    return lambda _: random.seed(worker_seed)
 
 
 def format_stats(stats: Dict[str, float]):
@@ -34,15 +30,15 @@ def format_stats(stats: Dict[str, float]):
     """
     parts = [
         f"loss={stats.get('loss', 0.0):.4f}",
-        f"ce={stats.get('loss_ce', 0.0):.4f}",
-        f"pair={stats.get('loss_pair', 0.0):.4f}",
+        f"ce={stats.get('ce_loss', 0.0):.4f}",
+        f"pair_L1={stats.get('L1_loss_pair', 0.0):.4f}",
+        f"pair_IoU={stats.get('GIoU_loss_pair', 0.0):.4f}"
     ]
     return "(" + ", ".join(parts) + ")"
 
 
-def init_trainer(model_config: ModelConfig, finetune: bool):
-    parameters = model_config.training_parameters if not finetune else model_config.finetune_parameters
-    model_params = model_config.model_parameters
+def init_trainer(model_config: ModelConfig):
+    parameters = model_config.training_parameters
     # get the device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -53,12 +49,13 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
     dataset_config = DatasetConfig.open(parameters.dataset)
     dataset_config.load() # builds cache
     train_dataset, val_dataset, test_dataset = dataset_config.to_torch_dataset()
-    sizes = (512,)
-    train_dataset.transform = TrainingTransform(sizes) # type: ignore
-    val_dataset.transform = ValidationTransform(512) # type: ignore
-    test_dataset.transform = ValidationTransform(512) # type: ignore
+    image_size = parameters.img_size
+    train_dataset.transform = TrainingTransform(model_config.augmentations, image_size)
+    val_dataset.transform = ValidationTransform(image_size)
+    test_dataset.transform = ValidationTransform(image_size)
 
     # create the data loaders
+    # all the loaders are initialized with the same random seed
     loader_generator = torch.Generator()
     loader_generator.manual_seed(parameters.seed)
     train_loader = DataLoader(
@@ -68,7 +65,7 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
-        worker_init_fn=seed_worker,
+        worker_init_fn=seed_worker(parameters.seed),
         generator=loader_generator,
     )
     val_loader = DataLoader(
@@ -78,7 +75,7 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
-        worker_init_fn=seed_worker,
+        worker_init_fn=seed_worker(parameters.seed),
     )
     test_loader = DataLoader(
         test_dataset,
@@ -87,15 +84,15 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
-        worker_init_fn=seed_worker,
+        worker_init_fn=seed_worker(parameters.seed),
     )
     # build the model
     model = build_model(model_config)
     model = model.to(device)
     print(f"# model built and loaded to '{device}'")
     # if finetuning, then load the weights
-    if finetune:
-        load_weights(model, parameters.weights, device) # type: ignore
+    if parameters.finetune is not None:
+        load_weights(model, parameters.finetune, device)
         freeze_backbone(model)
 
     # display statistics over the number of parameters
@@ -158,17 +155,16 @@ def init_trainer(model_config: ModelConfig, finetune: bool):
         test_dataloader=test_loader,
         model_config=model_config,
         dataset_config=dataset_config,
-        finetune=finetune,
         evaluator=evaluator
     )
     return trainer
 
 
-def train(model_config: ModelConfig, finetune=False, resume_path=None, save_weights_folder="checkpoints"):
+def train(model_config: ModelConfig, resume_path=None, save_weights_folder="checkpoints"):
     save_dir = Path(save_weights_folder)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    trainer = init_trainer(model_config, finetune=finetune)
+    trainer = init_trainer(model_config)
 
     if resume_path is not None:
         trainer.resume(Path(resume_path))
