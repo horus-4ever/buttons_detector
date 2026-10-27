@@ -12,20 +12,20 @@
                 "button": {
                     "visible": true,
                     "bbox": {
-                        "cx_ndc": 0.5,
-                        "cy_ndc": 0.5,
-                        "width_ndc": 0.1,
-                        "height_ndc": 0.1
+                        "cx": 0.5,
+                        "cy": 0.5,
+                        "w": 0.1,
+                        "h": 0.1
                     }
                 },
                 "counterpart": {
                     "type": "velcro",
                     "visible": true,
                     "bbox": {
-                        "cx_ndc": 0.5,
-                        "cy_ndc": 0.5,
-                        "width_ndc": 0.1,
-                        "height_ndc": 0.1
+                        "cx": 0.5,
+                        "cy": 0.5,
+                        "w": 0.1,
+                        "h": 0.1
                     }
                 },
                 "fastened": true

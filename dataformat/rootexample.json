@@ -1,11 +1,13 @@
 {
     "root": "/path/to/the/dataset/root/directory",
-    "images_dir": "images",
-    "annotations_dir": "annotations",
-    "split": {
-        "seed": 42,
-        "train": 0.7,
-        "val": 0.2,
-        "test": 0.1
-    }
+    "train": [
+        "garment_1",
+        "garment_2"
+    ],
+    "validation": [
+        "garment_3"
+    ],
+    "test": [
+        "hold_out"
+    ]
 }
