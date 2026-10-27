@@ -50,6 +50,7 @@ if __name__ == "__main__":
     model = build_model_from(model_path)
     model.to(device=device)
     load_weights(model, weights=weights_path, device=device)
+    model.eval()
     # get the dataset
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     train, val, test = dataset.to_torch_dataset()
