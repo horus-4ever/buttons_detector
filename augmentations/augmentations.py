@@ -230,13 +230,13 @@ class RandomMasking(Transform):
                     fill=_coerce_fill(image, self.fill),
                 )
                 # update the labels
-                self._update_labels(new_labels, rect, W, H)
-            return image, new_labels
+                self._update_labels(new_labels, (x0 / W, y0 / H, x1 / W, y1 / H), W, H)
+            return out, new_labels
 
     def _box_percentage(self, box, mask):
         return _box_area(_box_intersection(box, mask)) / _box_area(box)
 
-    def _update_labels(self, labels: Annotation, rect: tuple[int, int, int, int], W, H):
+    def _update_labels(self, labels: Annotation, rect: tuple[float, float, float, float], W, H):
         """
         Update the labels for the masking transform.
         """
