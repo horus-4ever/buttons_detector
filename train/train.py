@@ -17,11 +17,9 @@ from .evaluator import get_evaluator
 from .trainer import Trainer
 
 
-def seed_worker(worker_seed):
-    """
-    Seeds Python's random module inside each DataLoader worker.
-    """
-    return lambda _: random.seed(worker_seed)
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    random.seed(worker_seed)
 
 
 def format_stats(stats: Dict[str, float]):
@@ -65,7 +63,7 @@ def init_trainer(model_config: ModelConfig):
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
-        worker_init_fn=seed_worker(parameters.seed),
+        worker_init_fn=seed_worker,
         generator=loader_generator,
     )
     val_loader = DataLoader(
@@ -75,7 +73,7 @@ def init_trainer(model_config: ModelConfig):
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
-        worker_init_fn=seed_worker(parameters.seed),
+        worker_init_fn=seed_worker,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -84,7 +82,7 @@ def init_trainer(model_config: ModelConfig):
         num_workers=parameters.num_workers,
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda"),
-        worker_init_fn=seed_worker(parameters.seed),
+        worker_init_fn=seed_worker,
     )
     # build the model
     model = build_model(model_config)
