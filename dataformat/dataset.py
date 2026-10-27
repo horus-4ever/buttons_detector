@@ -62,15 +62,9 @@ class DatasetConfig:
     @classmethod
     def from_json(cls, json_data: dict) -> "DatasetConfig":
         dataset_root = Path(json_data["root"])
-        train_paths = [
-            dataset_root / garment_name for garment_name in json_data["train"]
-        ]
-        val_paths = [
-            dataset_root / garment_name for garment_name in json_data["validation"]
-        ]
-        test_paths = [
-            dataset_root / garment_name for garment_name in json_data["test"]
-        ]
+        train_paths = json_data["train"]
+        val_paths = json_data["validation"]
+        test_paths = json_data["test"]
         return cls(
             dataset_root=dataset_root,
             train_paths=train_paths,
