@@ -1,5 +1,31 @@
 from dataclasses import dataclass, field
 import torch
+from enum import StrEnum
+
+
+class GarmentState(StrEnum):
+    """
+    Represents the state of a garment.
+    The garment can be represented either:
+      - laying flat on the ground
+      - hanged on a hanger
+      - worn by a person
+    """
+    FLAT = "FLAT"
+    HANGED = "HANGED"
+    WORN = "WORN"
+    UNDEFINED = "UNDEFINED"
+
+    @classmethod
+    def from_json(cls, data: str | None):
+        match data:
+            case "FLAT": return cls.FLAT
+            case "HANGED": return cls.HANGED
+            case "WORN": return cls.WORN
+            case _: return cls.UNDEFINED
+    
+    def to_json(self):
+        return str(self)
 
 
 @dataclass
@@ -145,18 +171,37 @@ class Pair:
 
 
 @dataclass
+class ClothMetadata:
+    state: GarmentState
+    type: str
+
+    def to_json(self):
+        return {
+            "state": self.state.to_json(),
+            "type": self.type
+        }
+
+    @classmethod
+    def from_json(cls, json_data: dict):
+        return cls(
+            state=GarmentState.from_json(json_data.get("state")),
+            type=json_data.get("type", "")
+        )
+
+
+@dataclass
 class Cloth:
     """
     Represent a clothing item, with its pairs of <button, counterpart>.
     `segmentation` represents the path to the segmentation mask of the clothing item.
     """
-    type: str
+    metadata: ClothMetadata
     segmentation: str
     pairs: list[Pair]
 
     def to_json(self):
         return {
-            "type": self.type,
+            "metadata": self.metadata.to_json(),
             "segmentation": self.segmentation,
             "pairs": list(pair.to_json() for pair in self.pairs)
         }
@@ -164,7 +209,7 @@ class Cloth:
     @classmethod
     def from_json(cls, json_data: dict) -> "Cloth":
         return cls(
-            type=json_data["type"],
+            metadata=ClothMetadata.from_json(json_data["metadata"]),
             segmentation=json_data["segmentation"],
             pairs=[Pair.from_json(pair) for pair in json_data["pairs"]]
         )

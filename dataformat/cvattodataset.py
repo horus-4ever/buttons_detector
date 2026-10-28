@@ -99,7 +99,7 @@ class CVATParser:
     def _parse_cloth(self, image: xml.Element) -> df.Cloth:
         pairs = self._parse_pairs(image)
         return df.Cloth(
-            type="real",
+            metadata=df.ClothMetadata(df.GarmentState.UNDEFINED, ""),
             segmentation="",
             pairs=pairs
         )
