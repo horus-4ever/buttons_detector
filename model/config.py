@@ -85,7 +85,7 @@ class TrainingParameters:
     def from_json(cls, data):
         return cls(
             dataset=Path(data["dataset"]),
-            finetune=Path(data["finetune"]) if data["finetune"] is not None else None,
+            finetune=Path(data["finetune"]) if data.get("finetune") is not None else None,
             batch_size=data["batch_size"],
             num_epochs=data["num_epochs"],
             lr=data["lr"],

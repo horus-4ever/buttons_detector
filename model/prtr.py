@@ -199,3 +199,14 @@ def build_model_from(json_path: str | Path):
     path = Path(json_path)
     model_config = ModelConfig.open(path)
     return build_model(model_config)
+
+
+def load_model_from_weights(weights: Path, device):
+    if not weights.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {weights}")
+    checkpoint = torch.load(weights, map_location=device, weights_only=False)
+    assert "model_state_dict" in checkpoint
+    model_config = ModelConfig.from_json(checkpoint["model_configuration"])
+    model = build_model(model_config)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    return model
