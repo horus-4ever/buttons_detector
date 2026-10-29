@@ -1,6 +1,7 @@
-from .evaluate import Evaluator, PairIoUAllEvaluation, PairDistanceAllEvaluation, PairIoUEvaluation, PairDistanceEvaluation
+from .evaluate import Evaluator, PairIoUAllEvaluation, PairDistanceAllEvaluation, EvaluationGroup
 from model.prtr import build_model_from
 from model.utils import load_weights
+from model.mode import Mode
 from dataformat.dataset import DatasetConfig
 from train.commons import collate_fn
 from torch.utils.data import DataLoader
@@ -22,15 +23,22 @@ def init_parser():
     return parser
 
 
+def get_evaluation_groups():
+    return [
+        EvaluationGroup.VISIBLE_GROUP(),
+        EvaluationGroup.INVISIBLE_GROUP()
+    ]
+
 def get_evaluator(threshold: float = 0.9) -> Evaluator:
     """
     Returns an evaluator with the given threshold.
     """
     evaluator = Evaluator()
-    evaluator.add_evaluation("distance", PairDistanceAllEvaluation())
-    evaluator.add_evaluation("iou", PairIoUAllEvaluation())
-    evaluator.add_evaluation("distance_threshold", PairDistanceAllEvaluation(confidence_threshold=threshold))
-    evaluator.add_evaluation("iou_threshold", PairIoUAllEvaluation(confidence_threshold=threshold))
+    groups = get_evaluation_groups()
+    evaluator.add_evaluation("distance", PairDistanceAllEvaluation(groups=groups))
+    evaluator.add_evaluation("iou", PairIoUAllEvaluation(groups=groups))
+    evaluator.add_evaluation("distance_threshold", PairDistanceAllEvaluation(confidence_threshold=threshold, groups=groups))
+    evaluator.add_evaluation("iou_threshold", PairIoUAllEvaluation(confidence_threshold=threshold, groups=groups))
     return evaluator
 
 
@@ -89,8 +97,9 @@ if __name__ == "__main__":
             annotations = annotations[0] # batch size is 1 for evaluation
             images = images.to(device, non_blocking=True)
             padding_mask = padding_mask.to(device, non_blocking=True)
-            output = model(images, padding_mask)
-            outputs.append((annotations, output))
+            with torch.inference_mode(True):
+                output = model(images, padding_mask, Mode.EVALUATION)
+                outputs.append((annotations, output))
         evaluations = evaluator.evaluate(outputs)
         print("#### EVALUATION ####")
         print("~~~~ Pair Distance AP ~~~~")

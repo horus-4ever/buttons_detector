@@ -1,12 +1,101 @@
 import abc
 import math
 from dataclasses import dataclass, field
-from typing import Any, override
+from typing import Any, Callable, Iterable, override
 
 import torch
 from torchvision.ops import box_iou
 from dataformat.dataformat import *
 from dataformat.dataformat import Annotation
+
+
+class EvaluationGroup:
+    """
+    Define an evaluation group.
+    An evaluation group is defined by a boolean function that determine if the
+    given annotation is part of the group.
+    """
+    def __init__(self, name: str, func: Callable):
+        self.name = name
+        self.func = func
+
+    def is_applicable(self, pair: Pair):
+        return self.func(pair)
+
+    @classmethod
+    def ALL(cls) -> "EvaluationGroup":
+        return cls("ALL", lambda _: True)
+
+    @classmethod
+    def VISIBLE_GROUP(cls) -> "EvaluationGroup":
+        return cls("VISIBLE", lambda pair: pair.counterpart.visible and not pair.fastened)
+
+    @classmethod
+    def INVISIBLE_GROUP(cls) -> "EvaluationGroup":
+        return cls("INVISIBLE", lambda pair: not pair.counterpart.visible and not pair.fastened)
+
+
+class RunningEvaluation:
+    def __init__(self, group, nb_ground_truths):
+        self.group = group
+        self.nb_ground_truths = nb_ground_truths
+        self.nb_matched = 0
+        self.nb_predictions = 0
+        self.previous_recall = 0.0
+        self.AP = 0.0
+
+    @property
+    def recall(self):
+        return self.nb_matched / self.nb_ground_truths if self.nb_ground_truths > 0 else 0.0
+
+    @property
+    def precision(self):
+        return self.nb_matched / self.nb_predictions if self.nb_predictions > 0 else 0.0
+
+    def update_AP(self):
+        self.AP += (self.recall - self.previous_recall) * self.precision
+        self.previous_recall = self.recall
+
+
+@dataclass
+class EvaluationResult:
+    nb_gt: int = 0
+    nb_matched: int = 0
+    precision: float = 0.0
+    recall: float = 0.0
+    AP: float = 0.0
+
+    @property
+    def F1(self) -> float:
+        return 2 * (self.precision * self.recall) / (self.precision + self.recall)
+
+    @classmethod
+    def from_running(cls, other: RunningEvaluation):
+        return cls(
+            nb_gt=other.nb_ground_truths,
+            nb_matched=other.nb_matched,
+            precision=other.precision,
+            recall=other.recall,
+            AP=other.AP
+        )
+
+    def __add__(self, other: "EvaluationResult"):
+        return EvaluationResult(
+            other.nb_gt,
+            other.nb_matched,
+            self.precision + other.precision,
+            self.recall + other.recall,
+            self.AP + other.AP
+        )
+
+    def __truediv__(self, n: int | float):
+        return EvaluationResult(
+            self.nb_gt,
+            self.nb_matched,
+            self.precision / n,
+            self.recall / n,
+            self.AP / n
+        )
 
 
 class PairWrapper:
@@ -126,6 +215,10 @@ class Evaluation(abc.ABC):
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]) -> Any:
         pass
 
+    @staticmethod
+    def DEFAULT_EVALUATION_GROUP() -> list[EvaluationGroup]:
+        return [EvaluationGroup.ALL()]
+
     def filter_confidence(self, predictions: list[Prediction], threshold: float):
         """
         Filters the predictions whose confidences are above the given threshold.
@@ -142,6 +235,26 @@ class Evaluation(abc.ABC):
         """
         return sorted(predictions, key=lambda p: p.confidence, reverse=not ascending)
 
+    def _get_groups(self, groups: list[EvaluationGroup] | None):
+        result = self.DEFAULT_EVALUATION_GROUP()
+        result.extend(group for group in (groups or []) if group.name != "ALL")
+        return result
+
+    def _group_mean(self, metrics: list[dict], group_names: list[str]):
+        """
+        Compute the mean value over n metrics for each group.
+        """
+        n_metrics = len(metrics)
+        results = {group_name: EvaluationResult() for group_name in group_names}
+        for metric in metrics:
+            for group_name, value in metric.items():
+                results[group_name] += value / n_metrics
+        return results
+
+    def _group_increment_predictions(self, groups: dict[str, RunningEvaluation]):
+        for running in groups.values():
+            running.nb_predictions += 1
+
 
 class PairIoUEvaluation(Evaluation):
     """
@@ -156,22 +269,26 @@ class PairIoUEvaluation(Evaluation):
         - match the prediction to the closest ground truth annotation (max then argmax)
     """
     
-    def __init__(self, iou_threshold: float):
+    def __init__(self, iou_threshold: float, groups: list[EvaluationGroup] | None = None):
         self.iou_threshold = iou_threshold
+        self.groups = self._get_groups(groups)
 
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        # define the groups
+        groups = {}
+        for group in self.groups:
+            group_annotations = [annotation for annotation in annotations if group.is_applicable(annotation.pair)]
+            groups[group.name] = RunningEvaluation(group, len(group_annotations))
         # sort by highest confidence order
         predictions = self.sort_by_confidence(predictions, ascending=False)
         matched = torch.zeros(len(annotations), dtype=torch.bool)
-        nb_ground_truths = len(annotations)
         # compute the AP based on greedy matching
-        AP = 0.0
-        previous_recall = 0.0
-        for n, prediction in enumerate(predictions):
+        for prediction in predictions:
             # get the annotations corresponding to the image of the prediction
             image_ann_indices = torch.tensor([index for index, pair in enumerate(annotations) if pair.image_id == prediction.image_id])
             pred_annotations = [pair for pair in annotations if pair.image_id == prediction.image_id]
             if not pred_annotations: # no ground truth for this image, we skip it
+                self._group_increment_predictions(groups)
                 continue
             # get the button and counterpart bboxes (single tensor)
             pred_button_bbox = prediction.button_box # [4]
@@ -186,30 +303,21 @@ class PairIoUEvaluation(Evaluation):
             ious_counterpart[matched[image_ann_indices]] = -1.0
             keep = (ious_button >= self.iou_threshold) & (ious_counterpart >= self.iou_threshold)
             if not keep.any():
+                self._group_increment_predictions(groups)
                 continue
             kept_together = torch.min(ious_button, ious_counterpart)
             kept_together[~keep] = -1.0
             _, best_gt_index = kept_together.max(dim=0)
             matched[image_ann_indices[best_gt_index]] = True
-            # now we compute the running AP
-            nb_matched = int(matched.sum().item())
-            nb_predictions = n + 1
-            recall = nb_matched / nb_ground_truths if nb_ground_truths > 0 else 0.0
-            precision = nb_matched / nb_predictions if nb_predictions > 0 else 0.0
-            AP += (recall - previous_recall) * precision
-            previous_recall = recall
-        nb_matched = int(matched.sum().item())
-        nb_predictions = len(predictions)
-        overall = Metric(
-            TP=nb_matched,
-            TN=0,
-            FP=nb_predictions - nb_matched,
-            FN=nb_ground_truths - nb_matched
-        )
-        return {
-            "AP": AP,
-            "overall": overall
-        }
+            # group update
+            annotation = pred_annotations[best_gt_index]
+            for running in groups.values():
+                if not running.group.is_applicable(annotation.pair):
+                    continue
+                running.nb_predictions += 1
+                running.nb_matched += 1
+                running.update_AP()
+        return {name: EvaluationResult.from_running(running) for name, running in groups.items()}
 
 
 class PairDistanceEvaluation(Evaluation):
@@ -225,24 +333,28 @@ class PairDistanceEvaluation(Evaluation):
         - match the prediction to the closest ground truth annotation (max then argmin)
     """
 
-    def __init__(self, distance_threshold: float, image_size: int = 512):
+    def __init__(self, distance_threshold: float, image_size: int = 512, groups: list[EvaluationGroup] | None = None):
         self.distance_threshold = distance_threshold
         self.image_size = image_size
+        self.groups = self._get_groups(groups)
 
     @override
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        # define the groups
+        groups = {}
+        for group in self.groups:
+            group_annotations = [annotation for annotation in annotations if group.is_applicable(annotation.pair)]
+            groups[group.name] = RunningEvaluation(group, len(group_annotations))
         # sort by highest confidence order
         predictions = self.sort_by_confidence(predictions, ascending=False)
         matched = torch.zeros(len(annotations), dtype=torch.bool)
-        nb_ground_truths = len(annotations)
         # compute the AP based on greedy matching
-        AP = 0.0
-        previous_recall = 0.0
-        for n, prediction in enumerate(predictions):
+        for prediction in predictions:
             # get the annotations corresponding to the image of the prediction
             image_ann_indices = torch.tensor([index for index, pair in enumerate(annotations) if pair.image_id == prediction.image_id])
             pred_annotations = [pair for pair in annotations if pair.image_id == prediction.image_id]
             if not pred_annotations: # no ground truth for this image, we skip it
+                self._group_increment_predictions(groups)
                 continue
             # get the button and counterpart centers (single tensor)
             pred_button_center = prediction.button_box[:2] # [2]
@@ -265,76 +377,73 @@ class PairDistanceEvaluation(Evaluation):
             # match only if both distances for the button and the counterpart are below the threshold
             keep = (distance_button <= self.distance_threshold / self.image_size) & (distance_counterpart <= self.distance_threshold / self.image_size)
             if not keep.any():
+                self._group_increment_predictions(groups)
                 continue
             kept_together = torch.max(distance_button, distance_counterpart)
             kept_together[~keep] = math.inf
             _, best_gt_index = kept_together.min(dim=0)
             matched[image_ann_indices[best_gt_index]] = True
-            # now we compute the running AP
-            nb_matched = int(matched.sum().item())
-            nb_predictions = n + 1
-            recall = nb_matched / nb_ground_truths if nb_ground_truths > 0 else 0.0
-            precision = nb_matched / nb_predictions if nb_predictions > 0 else 0.0
-            AP += (recall - previous_recall) * precision
-            previous_recall = recall
-        nb_matched = int(matched.sum().item())
-        nb_predictions = len(predictions)
-        overall = Metric(
-            TP=nb_matched,
-            TN=0,
-            FP=nb_predictions - nb_matched,
-            FN=nb_ground_truths - nb_matched
-        )
-        return {
-            "AP": AP,
-            "overall": overall
-        }
+            # now we compute the running AP for the groups
+            annotation = pred_annotations[best_gt_index]
+            for running in groups.values():
+                if not running.group.is_applicable(annotation.pair):
+                    continue
+                running.nb_predictions += 1
+                running.nb_matched += 1
+                running.update_AP()
+        return {name: EvaluationResult.from_running(running) for name, running in groups.items()}
 
 
 class PairIoUAllEvaluation(Evaluation):
-    def __init__(self, confidence_threshold: float = 0.0):
+    def __init__(self, confidence_threshold: float = 0.0, groups: list[EvaluationGroup] | None = None):
         self.confidence_threshold = confidence_threshold
+        self.groups = self._get_groups(groups)
 
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
         predictions = self.filter_confidence(predictions, self.confidence_threshold)
-        ap_50_evaluator = PairIoUEvaluation(iou_threshold=0.5)
-        ap_75_evaluator = PairIoUEvaluation(iou_threshold=0.75)
-        ap_90_evaluator = PairIoUEvaluation(iou_threshold=0.9)
-        AP_50 = ap_50_evaluator.evaluate(predictions, annotations)["AP"]
-        AP_75 = ap_75_evaluator.evaluate(predictions, annotations)["AP"]
-        AP_90 = ap_90_evaluator.evaluate(predictions, annotations)["AP"]
-        AP = (AP_50 + AP_75 + AP_90) / 3
-        return {
+        ap_50_evaluator = PairIoUEvaluation(iou_threshold=0.5, groups=self.groups)
+        ap_75_evaluator = PairIoUEvaluation(iou_threshold=0.75, groups=self.groups)
+        ap_90_evaluator = PairIoUEvaluation(iou_threshold=0.9, groups=self.groups)
+        AP_50 = ap_50_evaluator.evaluate(predictions, annotations)
+        AP_75 = ap_75_evaluator.evaluate(predictions, annotations)
+        AP_90 = ap_90_evaluator.evaluate(predictions, annotations)
+        group_names = list(group.name for group in self.groups)
+        AP = self._group_mean([AP_50, AP_75, AP_90], group_names)
+        metrics = {
             "AP_50": AP_50,
             "AP_75": AP_75,
             "AP_90": AP_90,
             "AP": AP
         }
+        return metrics
 
 
 
 class PairDistanceAllEvaluation(Evaluation):
-    def __init__(self, confidence_threshold: float = 0.0):
+    def __init__(self, confidence_threshold: float = 0.0, groups: list[EvaluationGroup] | None = None):
         self.confidence_threshold = confidence_threshold
+        self.groups = self._get_groups(groups)
 
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
         predictions = self.filter_confidence(predictions, self.confidence_threshold)
-        ap_1_evaluator = PairDistanceEvaluation(distance_threshold=1.0)
-        ap_3_evaluator = PairDistanceEvaluation(distance_threshold=3.0)
-        ap_5_evaluator = PairDistanceEvaluation(distance_threshold=5.0)
-        ap_10_evaluator = PairDistanceEvaluation(distance_threshold=10.0)
-        AP_1 = ap_1_evaluator.evaluate(predictions, annotations)["AP"]
-        AP_3 = ap_3_evaluator.evaluate(predictions, annotations)["AP"]
-        AP_5 = ap_5_evaluator.evaluate(predictions, annotations)["AP"]
-        AP_10 = ap_10_evaluator.evaluate(predictions, annotations)["AP"]
-        AP = (AP_1 + AP_3 + AP_5 + AP_10) / 4
-        return {
+        ap_1_evaluator = PairDistanceEvaluation(distance_threshold=1.0, groups=self.groups)
+        ap_3_evaluator = PairDistanceEvaluation(distance_threshold=3.0, groups=self.groups)
+        ap_5_evaluator = PairDistanceEvaluation(distance_threshold=5.0, groups=self.groups)
+        ap_10_evaluator = PairDistanceEvaluation(distance_threshold=10.0, groups=self.groups)
+        AP_1 = ap_1_evaluator.evaluate(predictions, annotations)
+        AP_3 = ap_3_evaluator.evaluate(predictions, annotations)
+        AP_5 = ap_5_evaluator.evaluate(predictions, annotations)
+        AP_10 = ap_10_evaluator.evaluate(predictions, annotations)
+        group_names = list(group.name for group in self.groups)
+        AP = self._group_mean([AP_1, AP_3, AP_5, AP_10], group_names)
+        metrics = {
             "AP_1": AP_1,
             "AP_3": AP_3,
             "AP_5": AP_5,
             "AP_10": AP_10,
             "AP": AP
         }
+        return metrics
 
 
 class Evaluator:
