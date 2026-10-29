@@ -7,6 +7,7 @@ from .backbone import MultiscaleResNet50
 from .config import ModelConfig
 from model.utils import MLP, inverse_sigmoid
 from pathlib import Path
+from .mode import Mode
 
 
 class PRTR(nn.Module):
@@ -101,7 +102,7 @@ class PRTR(nn.Module):
         return output
 
 
-    def forward(self, inputs, masks):
+    def forward(self, inputs, masks, mode: Mode = Mode.TRAINING):
         """
         - inputs: [B, 3, H_img, W_img]
         - masks: [B, H_img, W_img] (binary mask containing 1 on padded areas and 0 on non-padded areas)
@@ -151,17 +152,24 @@ class PRTR(nn.Module):
         pred_wh = deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
         pred_boxes = torch.cat([pred_centers, pred_wh], dim=-1)  # [B, Q, RpQ, 4]
 
-        return {
-            "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
-            "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
-            "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
-            "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
-            "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
-            "decoder_sampling_locations": decoder_sampling_locations, # [batch, num_queries, heads, num_levels, num_points, 2]
-            "spatial_shapes": spatial_shapes, # [num_levels, 2]
-            "reference_points": reference_points, # [query_len, RpQ, 2]
-            "image_size": (H, W)
-        }
+        if mode == Mode.DEBUG:
+            return {
+                "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
+                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
+                "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
+                "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
+                "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
+                "decoder_sampling_locations": decoder_sampling_locations, # [batch, num_queries, heads, num_levels, num_points, 2]
+                "spatial_shapes": spatial_shapes, # [num_levels, 2]
+                "reference_points": reference_points, # [query_len, RpQ, 2]
+                "image_size": (H, W)
+            }
+        elif mode == Mode.EVALUATION or mode == Mode.TRAINING:
+            return {
+                "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
+                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4],
+                "image_size": (H, W)
+            }
 
 
 
