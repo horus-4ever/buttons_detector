@@ -209,7 +209,7 @@ class Cloth:
     @classmethod
     def from_json(cls, json_data: dict) -> "Cloth":
         return cls(
-            metadata=ClothMetadata.from_json(json_data["metadata"]),
+            metadata=ClothMetadata(GarmentState.UNDEFINED, ""),
             segmentation=json_data["segmentation"],
             pairs=[Pair.from_json(pair) for pair in json_data["pairs"]]
         )
