@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image
 import torch
 from torchvision import transforms
+from model.mode import Mode
 
 
 @dataclass
@@ -38,18 +39,20 @@ class Inference:
         self.image_size = image_size
 
     @torch.no_grad()
-    def run_one(self, image: Image.Image):
+    def run_one(self, image: Image.Image, attention: bool = False):
         self._set_eval_mode()
         width, height = image.size
         processed_image = self._preprocess_image(image, self.image_size).to(device=self.device)
         masks = torch.zeros([1, height, width], dtype=torch.bool)
-        results = self.model(processed_image, masks)
-        inference_result = self._get_results(image, results)
-        return inference_result
+        inference_mode = Mode.EVALUATION if attention is False else Mode.DEBUG
+        with torch.inference_mode(True):
+            results = self.model(processed_image, masks, mode=inference_mode)
+            inference_result = self._get_results(image, results, attention)
+            return inference_result
 
-    def _get_results(self, image: Image.Image, results: dict):
+    def _get_results(self, image: Image.Image, results: dict, attention: bool):
         predictions = self._get_predictions(results)
-        attention_images = self._visualize_decoder_attention(image, results, predictions)
+        attention_images = self._visualize_decoder_attention(image, results, predictions) if attention else []
         prediction_image = self._visualize_predictions(image, predictions)
         result = InferenceResult(
             predictions=predictions,
