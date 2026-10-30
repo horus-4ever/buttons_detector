@@ -25,8 +25,8 @@ class PTModel:
             scheduler_state_dict=checkpoint["scheduler_state_dict"],
             losses=checkpoint["losses"],
             evaluations=checkpoint["evaluations"],
-            model_configuration=checkpoint["model_configuration"],
-            dataset_configuration=checkpoint["dataset_configuration"]
+            model_configuration=ModelConfig.from_json(checkpoint["model_configuration"]),
+            dataset_configuration=DatasetConfig.from_json(checkpoint["dataset_configuration"])
         )
 
     def to_json(self):
@@ -40,5 +40,3 @@ class PTModel:
             "model_configuration": self.model_configuration.to_json(),
             "dataset_configuration": self.dataset_configuration.to_json()
         }
-
-    
