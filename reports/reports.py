@@ -1,5 +1,7 @@
 import abc
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -32,6 +34,15 @@ class Visualizer(abc.ABC):
         result = [elem.to_dict() if isinstance(elem, EvaluationResult) else {"": elem} for elem in result]
         data = flatten_data(result, 1)
         return data[what]
+
+    @abc.abstractmethod
+    def visualize(self, request: Any):
+        raise NotImplementedError
+
+    def visualize_and_save(self, request: Any, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        plot, figure = self.visualize(request)
+        figure.savefig(path)
 
 
 class EvaluationVisualizer(Visualizer):
@@ -96,3 +107,20 @@ class LossVisualizer(Visualizer):
         plot.set_xlim(1, self.length)
         plot.set_ylim(0)
         return plot, figure
+
+
+class ComparisonValidationVisualizer(Visualizer):
+    def __init__(self, data: dict):
+        self.data = data
+
+    @classmethod
+    def from_checkpoints(cls, data: dict[str, PTModel]):
+        result_data = {}
+        for name, checkpoint in data.items():
+            flattened_data = flatten_data(checkpoint.evaluations, 4)
+            flattened_data = swap_layers(flattened_data, 2)
+            result_data[name] = flattened_data
+        print(result_data)
+        return cls(
+            data=result_data
+        )

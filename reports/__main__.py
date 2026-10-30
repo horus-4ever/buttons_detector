@@ -22,26 +22,24 @@ def load_weights(weights: Path, device):
 
 def init_parser():
     parser = ArgumentParser()
-    parser.add_argument("--weights", type=str, required=True)
+    parser.add_argument("--weights", type=str, nargs="+", required=True)
     parser.add_argument("--output", type=str, required=True)
     return parser
 
 if __name__ == "__main__":
     parser = init_parser()
     args = parser.parse_args()
-    weights_path = Path(args.weights)
+    weights_paths = [Path(path) for path in args.weights]
     output_path = Path(args.output)
     # load the model and save the graphs
-    checkpoint = load_weights(weights_path, device=torch.device("cpu"))
-    eval_visualizer = EvaluationVisualizer.from_checkpoint(checkpoint)
-    loss_visualizer = LossVisualizer.from_checkpoint(checkpoint)
-    figures = {}
-    for key, request in get_loss_reports().items():
-        plot, figure = loss_visualizer.visualize(request)
-        figures[key] = figure
-    for key, request in get_validation_reports().items():
-        plot, figure = eval_visualizer.visualize(request)
-        figures[key] = figure
-    # now save them
-    for key, figure in figures.items():
-        figure.savefig(output_path / f"{key}.png")
+    checkpoints = [load_weights(path, device=torch.device("cpu")) for path in weights_paths]
+    for checkpoint in checkpoints:
+        eval_visualizer = EvaluationVisualizer.from_checkpoint(checkpoint)
+        loss_visualizer = LossVisualizer.from_checkpoint(checkpoint)
+        figures = {}
+        for key, request in get_loss_reports().items():
+            fig_path = output_path / checkpoint.model_configuration.name / f"{key}.png"
+            loss_visualizer.visualize_and_save(request, fig_path)
+        for key, request in get_validation_reports().items():
+            fig_path = output_path / checkpoint.model_configuration.name / f"{key}.png"
+            eval_visualizer.visualize_and_save(request, fig_path)
