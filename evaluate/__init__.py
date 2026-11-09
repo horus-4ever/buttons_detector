@@ -1,1 +1,1 @@
-from .evaluate import Evaluator, PairDistanceAllEvaluation, PairIoUAllEvaluation, PairDistanceEvaluation, PairIoUEvaluation
+from .evaluate import Evaluator, PairDistanceAllEvaluation, PairIoUAllEvaluation, PairDistanceEvaluation, PairIoUEvaluation, EvaluationGroup

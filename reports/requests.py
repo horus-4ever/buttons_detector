@@ -1,4 +1,4 @@
-from .reports import EvaluationFigureRequest, LossFigureRequest
+from .reports import ComparisonValidationFigureRequest, EvaluationFigureRequest, LossFigureRequest
 
 
 def get_validation_reports():
@@ -34,7 +34,7 @@ def get_validation_reports():
     )
     return {
         "val_dist_APs": val_dist_APs,
-        "test_dict_APs": test_dist_APs
+        "test_dist_APs": test_dist_APs
     }
 
 def get_loss_reports():
@@ -83,4 +83,22 @@ def get_loss_reports():
         "train_loss_report": train_loss_report,
         "val_loss_report": val_loss_report,
         "val_train_loss_report": val_train_loss_report
+    }
+
+
+
+def get_test_groups_reports():
+    test_groups_APs = EvaluationFigureRequest(
+        [
+            "test_evaluation.distance.ALL.AP_10:AP",
+            "test_evaluation.distance.VISIBLE.AP_10:AP"
+        ],
+        [
+            "INVISIBLE AP",
+            "VISIBLE AP"
+        ],
+        "Comparison of the test distance APs over the epochs"
+    )
+    return {
+        "test_groups_APs": test_groups_APs
     }

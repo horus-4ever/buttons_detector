@@ -1,7 +1,7 @@
 import abc
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, override
+from typing import Any, Callable, override
 
 import torch
 from torchvision.ops import box_iou
@@ -33,6 +33,10 @@ class EvaluationGroup:
     @classmethod
     def INVISIBLE_GROUP(cls) -> "EvaluationGroup":
         return cls("INVISIBLE", lambda pair: not pair.counterpart.visible and not pair.fastened)
+
+    @classmethod
+    def FASTENED_GROUP(cls) -> "EvaluationGroup":
+        return cls("FASTENED", lambda pair: pair.fastened)
 
 
 class RunningEvaluation:
@@ -68,6 +72,13 @@ class EvaluationResult:
     @property
     def F1(self) -> float:
         return 2 * (self.precision * self.recall) / (self.precision + self.recall)
+
+    def to_dict(self):
+        return {
+            "precision": self.precision,
+            "recall": self.recall,
+            "AP": self.AP
+        }
 
     @classmethod
     def from_running(cls, other: RunningEvaluation):

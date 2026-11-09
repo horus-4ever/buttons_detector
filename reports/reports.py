@@ -24,6 +24,14 @@ class LossFigureRequest:
     fig_name: str
 
 
+@dataclass
+class ComparisonValidationFigureRequest:
+    curves: list[str]
+    curves_names: list[str]
+    models: list[str]
+    fig_name: str
+
+
 class Visualizer(abc.ABC):
     def get(self, data, name: str):
         name, _, what = name.partition(":")
@@ -113,14 +121,59 @@ class ComparisonValidationVisualizer(Visualizer):
     def __init__(self, data: dict):
         self.data = data
 
+    def get(self, data, name: str):
+        name, _, what = name.partition(":")
+        paths = name.split(".")
+        result = data
+        for path in paths:
+            result = result[path]
+        result = result.to_dict() if isinstance(result, EvaluationResult) else {"": result}
+        return result[what]
+
     @classmethod
-    def from_checkpoints(cls, data: dict[str, PTModel]):
+    def from_checkpoints(cls, checkpoints: list[PTModel]):
         result_data = {}
-        for name, checkpoint in data.items():
-            flattened_data = flatten_data(checkpoint.evaluations, 4)
+        for checkpoint in checkpoints:
+            flattened_data = checkpoint.evaluations[-1]
             flattened_data = swap_layers(flattened_data, 2)
-            result_data[name] = flattened_data
-        print(result_data)
+            result_data[checkpoint.model_configuration.name] = flattened_data
         return cls(
             data=result_data
         )
+
+    def visualize(self, request: ComparisonValidationFigureRequest):
+        figure, ax = plt.subplots(layout="constrained")
+        print([name for name in request.models])
+
+        data = {name: [] for name in request.models}
+
+        for model_name in request.models:
+            print(model_name)
+            for path in request.curves:
+                data[model_name].append(
+                    self.get(self.data, f"{model_name}.{path}")
+                )
+
+        n_models = len(request.models)
+        n_curves = len(request.curves)
+
+        bar_width = 0.8 / n_models
+        x = np.arange(n_curves)
+
+        for i, (model_name, values) in enumerate(data.items()):
+            offset = (i - (n_models - 1) / 2) * bar_width
+
+            ax.bar(
+                x + offset,
+                values,
+                width=bar_width,
+                label=model_name,
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(request.curves_names)
+
+        ax.set_ylabel("Value")
+        ax.legend()
+
+        return ax, figure
