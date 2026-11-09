@@ -37,6 +37,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.path.is_dir():
-        check_garment_directory(args.path)
+        for subdir in args.path.iterdir():
+            if subdir.is_dir():
+                check_garment_directory(subdir)
     else:
-        print(f"Invalid path: {args.path}. Must be a directory or a JSON file.")
+        print(f"Invalid path: {args.path}. Must be a directory.")
