@@ -4,7 +4,8 @@ from evaluate import Evaluator, PairDistanceAllEvaluation, PairIoUAllEvaluation,
 def get_groups() -> list[EvaluationGroup]:
     return [
         EvaluationGroup.INVISIBLE_GROUP(),
-        EvaluationGroup.VISIBLE_GROUP()
+        EvaluationGroup.VISIBLE_GROUP(),
+        EvaluationGroup.FASTENED_GROUP()
     ]
 
 

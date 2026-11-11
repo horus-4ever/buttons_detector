@@ -1,5 +1,5 @@
 from dataformat.dataset import Transform
-from augmentations import Transform, ComposeWithLabels, ComposeWrapper, get_transforms
+from augmentations import Transform, SaveImage, ComposeWithLabels, ComposeWrapper, get_transforms
 from torchvision import transforms as T
 from dataformat.dataformat import Annotation
 from PIL import Image

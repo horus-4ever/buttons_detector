@@ -11,6 +11,32 @@ from train import runner
 
 
 class Trainer:
+    """
+    Trainer class is responsible for the training of the models.
+    Models are evaluated at each step on:
+    - the validation dataset --> provides the target signal for best model selection
+    - the test dataset --> provides data for subsequent analysis of generalisation capabilities
+    The following informations are saved in each .pt file:
+    - model weights, optimizer and scheduler states
+    - losses over all training epochs
+    - evaluations over all training epochs
+    The evaluations are stored in the following format:
+    [{ 
+        "validation": {
+            "distance": {
+                "<group-name>": {
+                    "<metric-name>": <value>
+                }
+            },
+            "iou": {
+                ...
+            }
+        }
+        "test": {
+            ...
+        }
+    }, ...]
+    """
     def __init__(
             self,
             model,
@@ -73,6 +99,9 @@ class Trainer:
 
     @torch.no_grad()
     def evaluate(self):
+        """
+        Computes the current checkpoint's loss on the validation dataset.
+        """
         self.model.eval()
         self.criterion.eval()
         running: Dict[str, float] = {}
@@ -99,6 +128,9 @@ class Trainer:
 
     @torch.no_grad()
     def run_evaluations(self):
+        """
+        Run evaluations on the validation and test datasets.
+        """
         validation_results = self._run_evaluation(self.val_dataloader)
         test_results = self._run_evaluation(self.test_dataloader)
         return validation_results, test_results
@@ -112,12 +144,12 @@ class Trainer:
         val_evaluation, test_evaluation = self.run_evaluations()
         # save the losses
         self.losses.append({
-            "train_losses": train_losses,
-            "val_losses": val_losses
+            "train": train_losses,
+            "validation": val_losses
         })
         self.evaluations.append({
-            "val_evaluation": val_evaluation,
-            "test_evaluation": test_evaluation
+            "validation": val_evaluation,
+            "test": test_evaluation
         })
         self.scheduler.step()
         # save the best loss each time

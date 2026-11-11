@@ -284,6 +284,7 @@ class PairIoUEvaluation(Evaluation):
         self.iou_threshold = iou_threshold
         self.groups = self._get_groups(groups)
 
+    @override
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
         # define the groups
         groups = {}
@@ -406,11 +407,29 @@ class PairDistanceEvaluation(Evaluation):
 
 
 class PairIoUAllEvaluation(Evaluation):
+    """
+    Runs all the evaluations based on IoU metric, at the IoU thresholds 0.5, 0.75 and 0.9.
+    It also computes the mean AP over all three thresholds.
+    Due to the small size of counterparts, 90% threshold may be very noisy.
+    """
     def __init__(self, confidence_threshold: float = 0.0, groups: list[EvaluationGroup] | None = None):
         self.confidence_threshold = confidence_threshold
         self.groups = self._get_groups(groups)
 
+    @override
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        """
+        Evaluate the given predictions against the given annotations.
+        Returns a dictionnary in the following format:
+        {
+            "<group_name>": {
+                "AP_50": EvaluationResult,
+                "AP_75": EvaluationResult,
+                "AP_90": EvaluationResult,
+                "AP": EvaluationResult
+            }
+        }
+        """
         predictions = self.filter_confidence(predictions, self.confidence_threshold)
         ap_50_evaluator = PairIoUEvaluation(iou_threshold=0.5, groups=self.groups)
         ap_75_evaluator = PairIoUEvaluation(iou_threshold=0.75, groups=self.groups)
@@ -421,20 +440,37 @@ class PairIoUAllEvaluation(Evaluation):
         group_names = list(group.name for group in self.groups)
         AP = self._group_mean([AP_50, AP_75, AP_90], group_names)
         metrics = {
-            "AP_50": AP_50,
-            "AP_75": AP_75,
-            "AP_90": AP_90,
-            "AP": AP
+            name: {
+                "AP_50": AP_50[name].to_dict(),
+                "AP_75": AP_75[name].to_dict(),
+                "AP_90": AP_90[name].to_dict(),
+                "AP": AP[name].to_dict()
+            } for name in group_names
         }
         return metrics
 
 
 
 class PairDistanceAllEvaluation(Evaluation):
+    """
+    Runs all the evaluations based on distance metric, at the thresholds 1, 3, 5 and 10 pixels.
+    It also computes the mean AP over all four thresholds.
+    Note on the choice of the thresholds:
+    - we assume images are of size 512x512
+    - rescaling to 512x512 degrades the image quality
+    - counterparts are of mean size 5x11 pixels
+    - counterparts are less evident targets than buttons
+    - counterparts may be occluded and therefore invisible
+    - counterparts are therefore very small relative to the image size
+    Therefore 1 pixel is very strict and should not be relied on in practice.
+    The thresholds 3 and 5 pixels are the most relevant here.
+    The threshold 10 pixels is lenient.
+    """
     def __init__(self, confidence_threshold: float = 0.0, groups: list[EvaluationGroup] | None = None):
         self.confidence_threshold = confidence_threshold
         self.groups = self._get_groups(groups)
 
+    @override
     def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
         predictions = self.filter_confidence(predictions, self.confidence_threshold)
         ap_1_evaluator = PairDistanceEvaluation(distance_threshold=1.0, groups=self.groups)
@@ -448,20 +484,22 @@ class PairDistanceAllEvaluation(Evaluation):
         group_names = list(group.name for group in self.groups)
         AP = self._group_mean([AP_1, AP_3, AP_5, AP_10], group_names)
         metrics = {
-            "AP_1": AP_1,
-            "AP_3": AP_3,
-            "AP_5": AP_5,
-            "AP_10": AP_10,
-            "AP": AP
+            name: {
+                "AP_1": AP_1[name].to_dict(),
+                "AP_3": AP_3[name].to_dict(),
+                "AP_5": AP_5[name].to_dict(),
+                "AP_10": AP_10[name].to_dict(),
+                "AP": AP[name].to_dict()
+            } for name in group_names
         }
         return metrics
 
 
 class Evaluator:
+    """
+    Evaluates a model on a given dataset.
+    """
     def __init__(self):
-        """
-        Evaluator class that evaluates a model on a given dataset.
-        """
         self.evaluations = {}
 
     def add_evaluation(self, name: str, evaluation: Evaluation):

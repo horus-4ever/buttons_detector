@@ -1,0 +1,16 @@
+{
+    "root": "<root>",
+    "models": ["<model_name>"],
+    "reports": [
+        {
+            "title": "Recall curve for invisible and visible pairs",
+            "filename": "<filename>",
+            "type": "curve",
+            "models": [["<model_name>"], ["<model_name>"]],
+            "data": {
+                "Invisible": "evaluations.validation.distance.INVISIBLE.AP.recall",
+                "Visible": "evaluations.validation.distance.VISIBLE.AP.recall"
+            }
+        }
+    ]
+}

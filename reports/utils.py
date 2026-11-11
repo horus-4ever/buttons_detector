@@ -1,4 +1,19 @@
+from pathlib import Path
 from typing import Any
+import torch
+
+from model.ptmodel import PTModel
+
+def load_weights(weights: Path, device):
+    """
+    Loads the model weigths.
+    """
+    if not weights.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {weights}")
+    checkpoint = torch.load(weights, map_location=device, weights_only=False)
+    checkpoint["model_state_dict"].clear()  # Clear the model state dict to save memory
+    checkpoint = PTModel.from_checkpoint(checkpoint)
+    return checkpoint
 
 
 def flatten(data: list[dict]):

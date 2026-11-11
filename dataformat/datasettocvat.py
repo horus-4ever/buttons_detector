@@ -19,6 +19,7 @@ def add_box(
     pair_id: int,
     width: int,
     height: int,
+    fastened: bool = False,
 ):
     # Convert normalized corner coordinates into pixel coordinates.
     x1, y1, x2, y2 = bbox.to_x1y1x2y2()
@@ -42,6 +43,10 @@ def add_box(
     xml.SubElement(box, "attribute", name="visible").text = (
         "true" if visible else "false"
     )
+    if label == "counterpart":
+        xml.SubElement(box, "attribute", name="fastened").text = (
+            "true" if fastened else "false"
+        )
 
 
 def convert_dataset_to_cvat_xml(dataset_dir, output_xml):
@@ -104,8 +109,8 @@ def convert_dataset_to_cvat_xml(dataset_dir, output_xml):
                 add_box(
                     image=image,
                     label="counterpart",
-                    bbox=pair.fastener.bbox,
-                    visible=pair.fastener.visible,
+                    bbox=pair.counterpart.bbox,
+                    visible=pair.counterpart.visible,
                     pair_id=pair_id,
                     width=info.width,
                     height=info.height,

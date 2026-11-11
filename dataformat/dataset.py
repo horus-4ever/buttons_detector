@@ -34,7 +34,7 @@ class PairDataset(Dataset):
         annotation: Annotation = self.annotations[index]
         # open the image and get the annotations as torch tensors
         image_path = annotation.image.url
-        image = Image.open(image_path)
+        image = Image.open(image_path).convert("RGB") # convert to RGB to ensure consistency
         # transform the image if any transformation needs to be applied
         if self.transform:
             image, annotation = self.transform(image, annotation)
@@ -53,10 +53,10 @@ class DatasetConfig:
 
     def to_json(self) -> dict:
         return {
-            "root": self.dataset_root,
-            "train": self.train_paths,
-            "validation": self.val_paths,
-            "test": self.test_paths
+            "root": str(self.dataset_root),
+            "train": [str(path) for path in self.train_paths],
+            "validation": [str(path) for path in self.val_paths],
+            "test": [str(path) for path in self.test_paths]
         }
 
     @classmethod

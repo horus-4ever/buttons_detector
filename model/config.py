@@ -67,8 +67,8 @@ class TrainingParameters:
 
     def to_json(self):
         return {
-            "dataset": self.dataset,
-            "finetune": self.finetune,
+            "dataset": str(self.dataset),
+            "finetune": str(self.finetune) if self.finetune is not None else None,
             "batch_size": self.batch_size,
             "num_epochs": self.num_epochs,
             "lr": self.lr,
