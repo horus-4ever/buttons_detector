@@ -1,0 +1,12 @@
+{
+    "models": "experiments/models/",
+    "datasets": "experiments/datasets/",
+    "weights": "experiments/weights/",
+    "runs": [
+        {
+            "name": "sim_p1",
+            "branch": "paper_model"
+        }
+    ],
+    "reports": "reports.json"
+}
