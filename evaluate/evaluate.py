@@ -438,12 +438,12 @@ class PairIoUAllEvaluation(Evaluation):
         AP_75 = ap_75_evaluator.evaluate(predictions, annotations)
         AP_90 = ap_90_evaluator.evaluate(predictions, annotations)
         group_names = list(group.name for group in self.groups)
-        AP = self._group_mean([AP_50, AP_75, AP_90], group_names)
+        AP = self._group_mean([AP_50, AP_75, AP_90], group_names) # type: ignore
         metrics = {
             name: {
-                "AP_50": AP_50[name].to_dict(),
-                "AP_75": AP_75[name].to_dict(),
-                "AP_90": AP_90[name].to_dict(),
+                "AP_50": AP_50[name].to_dict(), # type: ignore
+                "AP_75": AP_75[name].to_dict(), # type: ignore
+                "AP_90": AP_90[name].to_dict(), # type: ignore
                 "AP": AP[name].to_dict()
             } for name in group_names
         }
@@ -477,18 +477,19 @@ class PairDistanceAllEvaluation(Evaluation):
         ap_3_evaluator = PairDistanceEvaluation(distance_threshold=3.0, groups=self.groups)
         ap_5_evaluator = PairDistanceEvaluation(distance_threshold=5.0, groups=self.groups)
         ap_10_evaluator = PairDistanceEvaluation(distance_threshold=10.0, groups=self.groups)
+        # launch parallel tasks
         AP_1 = ap_1_evaluator.evaluate(predictions, annotations)
         AP_3 = ap_3_evaluator.evaluate(predictions, annotations)
         AP_5 = ap_5_evaluator.evaluate(predictions, annotations)
         AP_10 = ap_10_evaluator.evaluate(predictions, annotations)
         group_names = list(group.name for group in self.groups)
-        AP = self._group_mean([AP_1, AP_3, AP_5, AP_10], group_names)
+        AP = self._group_mean([AP_1, AP_3, AP_5, AP_10], group_names) # type: ignore
         metrics = {
             name: {
-                "AP_1": AP_1[name].to_dict(),
-                "AP_3": AP_3[name].to_dict(),
-                "AP_5": AP_5[name].to_dict(),
-                "AP_10": AP_10[name].to_dict(),
+                "AP_1": AP_1[name].to_dict(), # type: ignore
+                "AP_3": AP_3[name].to_dict(), # type: ignore
+                "AP_5": AP_5[name].to_dict(), # type: ignore
+                "AP_10": AP_10[name].to_dict(), # type: ignore
                 "AP": AP[name].to_dict()
             } for name in group_names
         }
@@ -516,7 +517,6 @@ class Evaluator:
             all_pairs.extend([PairWrapper(pair, image_id=annotation.image.url) for pair in annotation.cloth.pairs])
             predictions = Prediction.from_outputs(output, image_id=annotation.image.url)
             all_predictions.extend(predictions)
-        # then, we run the evaluations
         for name, evaluation in self.evaluations.items():
             results[name] = evaluation.evaluate(all_predictions, all_pairs)
         print()

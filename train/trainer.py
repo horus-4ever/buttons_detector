@@ -4,6 +4,7 @@ from typing import Dict
 import torch
 
 from model.config import ModelConfig
+from model.mode import Mode
 from model.utils import load_weights, freeze_backbone
 from dataformat.dataset import DatasetConfig, Annotation
 from evaluate import Evaluator
@@ -114,7 +115,7 @@ class Trainer:
         mean_losses = self._mean_losses(running, nb_batches)
         return mean_losses
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def _run_evaluation(self, dataloader):
         self.model.eval()
         outputs = []
@@ -122,11 +123,11 @@ class Trainer:
             annotations = annotations[0] # batch size is 1 for evaluation
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
-            output = self.model(images, padding_mask)
+            output = self.model(images, padding_mask, mode=Mode.EVALUATION)
             outputs.append((annotations, output))
         return self.evaluator.evaluate(outputs)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def run_evaluations(self):
         """
         Run evaluations on the validation and test datasets.

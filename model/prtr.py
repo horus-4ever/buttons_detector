@@ -164,7 +164,13 @@ class PRTR(nn.Module):
                 "reference_points": reference_points, # [query_len, RpQ, 2]
                 "image_size": (H, W)
             }
-        elif mode == Mode.EVALUATION or mode == Mode.TRAINING:
+        elif mode == Mode.EVALUATION:
+            return {
+                "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
+                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4],
+                "image_size": (H, W)
+            }
+        elif mode == Mode.TRAINING:
             return {
                 "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
                 "pred_boxes": pred_boxes, # [B, Q, RpQ, 4],
