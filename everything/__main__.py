@@ -5,9 +5,7 @@ from model.config import ModelConfig
 from dataformat.dataset import DatasetConfig
 import json
 from argparse import ArgumentParser
-
-
-REPO = git.Repo(".")
+from train.train import train
 
 
 def try_load_model_config(path: Path):
@@ -40,7 +38,7 @@ class Experiment:
             branch=json_data["branch"]
         )
 
-    def check(self, models: Path, datasets: Path, weights: Path):
+    def check(self, models: Path):
         # check if the model configuration exists
         model_config_path = (models / f"{self.name}.config.json")
         if not model_config_path.exists():
@@ -56,7 +54,7 @@ class Experiment:
         if model_config.name != self.name:
             print(f"Model configuration's name ({model_config.name}) doesn't match experiment name ({self.name}).") ; exit(0)
         # check if the dataset configuration exists
-        dataset_config_path = datasets / model_config.training_parameters.dataset
+        dataset_config_path = model_config.training_parameters.dataset
         if not dataset_config_path.exists():
             print(f"Dataset configuration '{dataset_config_path}' doesn't exist.") ; exit(-1)
         # now, try to load the dataset configuration
@@ -66,28 +64,46 @@ class Experiment:
         # else, everything was fine
         print("All is good, ready for training.")
 
+    def _git_change_branch(self):
+        pass
+
+    def _launch_training(self, context: "Everything"):
+        model_config_path = (context.models / f"{self.name}.config.json")
+        model_config = ModelConfig.open(model_config_path)
+        train(
+            model_config=model_config,
+            resume_path=None,
+            save_weights_folder="checkpoints"
+        )
+
+    def execute(self, context: "Everything"):
+        self._git_change_branch()
+        self._launch_training(context)
+
 
 @dataclass
 class Everything:
     models: Path
-    datasets: Path
-    weights: Path
     experiments: list[Experiment]
     reports: Path
 
     @classmethod
     def from_json(cls, json_data: dict):
+        models = Path(json_data["models"])
+        reports = Path(json_data["reports"])
         return cls(
-            models=Path(json_data["models"]),
-            datasets=Path(json_data["datasets"]),
-            weights=Path(json_data["weights"]),
+            models=models,
             experiments=[Experiment.from_json(experiment) for experiment in json_data["runs"]],
-            reports=Path(json_data["reports"])
+            reports=reports
         )
 
     def check(self):
         for experiment in self.experiments:
-            experiment.check(self.models, self.datasets, self.weights)
+            experiment.check(self.models)
+
+    def execute(self):
+        for experiment in self.experiments:
+            experiment.execute(context=self)
 
 
 def init_parser():
@@ -105,3 +121,4 @@ if __name__ == "__main__":
         json_data = json.load(file)
     everything = Everything.from_json(json_data)
     everything.check()
+    everything.execute()

@@ -1,7 +1,5 @@
 {
     "models": "experiments/models/",
-    "datasets": "experiments/datasets/",
-    "weights": "experiments/weights/",
     "runs": [
         {
             "name": "sim_p1",
