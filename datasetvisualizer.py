@@ -22,25 +22,25 @@ def plot_buttons_distribution(annotations: list[Annotation]):
     plt.show()
 
 
-def plot_fastener_size(annotations: list[Annotation], im_size: int = 512):
+def plot_counterpart_size(annotations: list[Annotation], im_size: int = 512):
     widths = []
     heights = []
     for ann in annotations:
         for pair in ann.cloth.pairs:
-            widths.append(pair.fastener.bbox.w * im_size)
-            heights.append(pair.fastener.bbox.h * im_size)
+            widths.append(pair.counterpart.bbox.w * im_size)
+            heights.append(pair.counterpart.bbox.h * im_size)
     plt.scatter(widths, heights, marker="o", s=10)
-    plt.title(f"Distribution of the fastener sizes in pixels ({im_size}x{im_size})")
+    plt.title(f"Distribution of the counterpart sizes in pixels ({im_size}x{im_size})")
     plt.show()
 
 
-def get_fastener_size_stats(annotations: list[Annotation], im_size: int = 512):
+def get_counterpart_size_stats(annotations: list[Annotation], im_size: int = 512):
     widths = []
     heights = []
     for ann in annotations:
         for pair in ann.cloth.pairs:
-            widths.append(pair.fastener.bbox.w * im_size)
-            heights.append(pair.fastener.bbox.h * im_size)
+            widths.append(pair.counterpart.bbox.w * im_size)
+            heights.append(pair.counterpart.bbox.h * im_size)
     return {
         "width": {
             "min": min(widths),
@@ -56,13 +56,13 @@ def get_fastener_size_stats(annotations: list[Annotation], im_size: int = 512):
         }
     }
 
-def plot_fastener_kmeans(annotations: list[Annotation], im_size: int = 512):
+def plot_counterpart_kmeans(annotations: list[Annotation], im_size: int = 512):
     widths = []
     heights = []
     for ann in annotations:
         for pair in ann.cloth.pairs:
-            widths.append(pair.fastener.bbox.w)
-            heights.append(pair.fastener.bbox.h)
+            widths.append(pair.counterpart.bbox.w)
+            heights.append(pair.counterpart.bbox.h)
     input = np.column_stack([np.array(widths), np.array(heights)])
     
     kmeans = KMeans(n_clusters=3, init="k-means++", n_init=10, random_state=42)
@@ -101,16 +101,16 @@ def get_button_size_stats(annotations: list[Annotation], im_size: int = 512):
 
 
 if __name__ == "__main__":
-    dataset_path = Path("dataset.json")
+    dataset_path = Path("new_format.dataset.json")
     dataset = DatasetConfig.open(config_path=dataset_path).load()
     # training dataset is representative of the dataset so let's use it
     train_dataset = dataset.train_annotations
-    plot_fastener_kmeans(train_dataset)
+    plot_counterpart_kmeans(train_dataset)
     plot_buttons_distribution(train_dataset)
-    plot_fastener_size(train_dataset)
-    fastener_stats = get_fastener_size_stats(train_dataset)
-    print("Fastener Size Statistics:")
-    for dimension, stats in fastener_stats.items():
+    plot_counterpart_size(train_dataset)
+    counterpart_stats = get_counterpart_size_stats(train_dataset)
+    print("counterpart Size Statistics:")
+    for dimension, stats in counterpart_stats.items():
         print(f"  {dimension.capitalize()}:")
         for stat, value in stats.items():
             print(f"    {stat.capitalize()}: {value}")
