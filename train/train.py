@@ -167,6 +167,18 @@ def train(model_config: ModelConfig, resume_path=None, save_weights_folder="chec
 
     trainer = init_trainer(model_config)
 
+    save_directory = save_dir / model_config.name
+    if save_directory.exists() and list(save_directory.glob("*")):
+        answer = input(f"The directory '{save_directory}' already exists. Continue [y/n]: ")
+        if answer.lower() not in ("y", "yes"):
+            exit(-1)
+        answer = input("Are you sure? [y/n]: ")
+        if answer.lower() not in ("y", "yes"):
+            exit(-1)
+    save_directory.mkdir(parents=True, exist_ok=True)
+    history_model_path = save_directory / f"{model_config.name}_history.pt"
+    best_model_path = save_directory / f"{model_config.name}.pt"
+
     num_epochs = model_config.training_parameters.num_epochs
     start_epoch = trainer.epoch
     # training loop
@@ -186,9 +198,10 @@ def train(model_config: ModelConfig, resume_path=None, save_weights_folder="chec
             "\033[0m"
         )
         # save the last model, and the best one
-        trainer.save_checkpoint(save_dir / "last.pt")
+        trainer.save_checkpoint(history_model_path)
         if trainer.last_was_best:
-            trainer.save_checkpoint(save_dir / "best.pt")
-            print(f"  🟢 New best model saved with val loss: {val_stats['loss']:.4f}")
+            trainer.save_checkpoint(best_model_path)
+            print(f"  🟢 New best model saved (loss={val_stats['loss']:.4f})")
         else:
             print("  🟡 No new best model")
+
