@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 from typing import Dict
 
 import torch
@@ -9,6 +10,23 @@ from model.utils import load_weights, freeze_backbone
 from dataformat.dataset import DatasetConfig, Annotation
 from evaluate import Evaluator
 from train import runner
+
+
+class Elapsed:
+    def __init__(self):
+        self.start_time = 0
+        self.elapsed = 0
+
+    @property
+    def current(self):
+        return time.time_ns() - self.start_time
+
+    def __enter__(self, *args):
+        self.start_time = time.time_ns()
+        return self
+
+    def __exit__(self, *args):
+        self.elapsed = time.time_ns() - self.start_time
 
 
 class Trainer:
@@ -86,6 +104,7 @@ class Trainer:
         running: Dict[str, float] = {}
         # epoch main loop
         n_images = len(self.dataloader)
+        start_time = time.time_ns()
         for i, (images, padding_mask, annotations, (W, H)) in enumerate(self.dataloader):
             print(f"\r\033[2K  - TRAIN: [{i + 1:<4} / {n_images}]", end="", flush=True)
             outputs, targets = runner.run_one(self.model, images, padding_mask, annotations, self.device)
@@ -95,8 +114,9 @@ class Trainer:
             self.optimizer.step()
             # accumulate the losses stored in the `losses` dict
             self._accumulate_losses(running, losses)
+        elapsed = (time.time_ns() - start_time) / 1e9
+        print(f" {elapsed:.4f}")
         # compute and return the mean of the losses over all batches
-        print("")
         nb_batches = len(self.dataloader)
         mean_losses = self._mean_losses(running, nb_batches)
         return mean_losses
@@ -123,6 +143,7 @@ class Trainer:
         self.model.eval()
         outputs = []
         n_images = len(dataloader)
+        start_time = time.time_ns()
         for i, (images, padding_mask, annotations, (W, H)) in enumerate(dataloader):
             print(f"\r\033[2K  - EVALUATE ({what}): [{i + 1:<4} / {n_images}]", end="", flush=True)
             annotations = annotations[0] # batch size is 1 for evaluation
@@ -130,7 +151,8 @@ class Trainer:
             padding_mask = padding_mask.to(self.device, non_blocking=True)
             output = self.model(images, padding_mask, mode=Mode.EVALUATION)
             outputs.append((annotations, output))
-        print("")
+        elapsed = (time.time_ns() - start_time) / 1e9
+        print(f" ({elapsed:.4f}s)")
         return self.evaluator.evaluate(outputs)
 
     @torch.inference_mode()

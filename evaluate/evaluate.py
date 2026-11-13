@@ -1,6 +1,7 @@
 import abc
 import math
 from dataclasses import dataclass, field
+import time
 from typing import Any, Callable, override
 
 import torch
@@ -512,13 +513,15 @@ class Evaluator:
         all_predictions = []
         results = {}
         # first, we need to put the predictions in the right format
-        n_images = len(outputs)
         for i, (annotation, output) in enumerate(outputs):
-            print(f"\r\033[2K  - COMPUTING EVALUATIONS: [{i + 1:<4} / {n_images}]", end="", flush=True)
             all_pairs.extend([PairWrapper(pair, image_id=annotation.image.url) for pair in annotation.cloth.pairs])
             predictions = Prediction.from_outputs(output, image_id=annotation.image.url)
             all_predictions.extend(predictions)
-        for name, evaluation in self.evaluations.items():
+        n_evaluations = len(self.evaluations)
+        start_time = time.time_ns()
+        for i, (name, evaluation) in enumerate(self.evaluations.items()):
+            print(f"\r\033[2K  - COMPUTING EVALUATIONS: [{i + 1:<4} / {n_evaluations}]", end="", flush=True)
             results[name] = evaluation.evaluate(all_predictions, all_pairs)
-        print("")
+        elapsed = (time.time_ns() - start_time) / 1e9
+        print(f" ({elapsed:.4f}s)")
         return results

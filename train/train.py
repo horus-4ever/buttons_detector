@@ -1,5 +1,6 @@
 import random
 from pathlib import Path
+import time
 from typing import Dict
 
 import torch
@@ -173,12 +174,16 @@ def train(model_config: ModelConfig, resume_path=None, save_weights_folder="chec
     for epoch in range(start_epoch, start_epoch + num_epochs):
         print(f"\033[1;34mEPOCH [{epoch + 1:<3} / {start_epoch + num_epochs}]\033[0m")
         # step one epoch of the trainer
+        start_time = time.time_ns()
         train_stats, val_stats, val_evaluation, test_evaluation = trainer.step()
+        elapsed = (time.time_ns() - start_time) / 1e9
         # display the epoch results
         print(
-            "\033[1m  - STATS: "
+            "\033[1m"
+            "  - STATS: "
             f"train {format_stats(train_stats)} | "
             f"val {format_stats(val_stats)}"
+            f"\n  - TIME: {elapsed:.4f}s"
             "\033[0m"
         )
         # save the last model, and the best one
