@@ -77,6 +77,16 @@ def inverse_sigmoid(x, eps=1e-6):
     return torch.log(x / (1.0 - x))
 
 
+def load_checkpoint(weights: Path, device=None):
+    """
+    Loads a checkpoint.
+    """
+    if not weights.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {weights}")
+    checkpoint = torch.load(weights, map_location=device, weights_only=False)
+    return checkpoint
+
+
 def load_weights(model, weights: Path, device):
     """
     Loads the model weigths into the model.

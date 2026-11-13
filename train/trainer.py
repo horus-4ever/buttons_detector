@@ -12,23 +12,6 @@ from evaluate import Evaluator
 from train import runner
 
 
-class Elapsed:
-    def __init__(self):
-        self.start_time = 0
-        self.elapsed = 0
-
-    @property
-    def current(self):
-        return time.time_ns() - self.start_time
-
-    def __enter__(self, *args):
-        self.start_time = time.time_ns()
-        return self
-
-    def __exit__(self, *args):
-        self.elapsed = time.time_ns() - self.start_time
-
-
 class Trainer:
     """
     Trainer class is responsible for the training of the models.
@@ -68,7 +51,8 @@ class Trainer:
             test_dataloader,
             model_config: ModelConfig,
             dataset_config: DatasetConfig,
-            evaluator: Evaluator
+            evaluator: Evaluator,
+            branch_infos: dict[str, str]
         ):
         self.model = model
         self.criterion = criterion
@@ -86,6 +70,7 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.last_was_best = False
         self.evaluator = evaluator
+        self.branch_infos = branch_infos
 
     def _accumulate_losses(self, running: Dict[str, float], losses: Dict[str, torch.Tensor]):
         for k, v in losses.items():
@@ -115,7 +100,7 @@ class Trainer:
             # accumulate the losses stored in the `losses` dict
             self._accumulate_losses(running, losses)
         elapsed = (time.time_ns() - start_time) / 1e9
-        print(f" {elapsed:.4f}")
+        print(f" ({elapsed:.4f}s)")
         # compute and return the mean of the losses over all batches
         nb_batches = len(self.dataloader)
         mean_losses = self._mean_losses(running, nb_batches)
@@ -218,7 +203,8 @@ class Trainer:
                 "losses": self.losses,
                 "evaluations": self.evaluations,
                 "model_configuration": self.model_config.to_json(),
-                "dataset_configuration": self.dataset_config.to_json()
+                "dataset_configuration": self.dataset_config.to_json(),
+                "branch_infos": self.branch_infos
             },
             save_path,
         )

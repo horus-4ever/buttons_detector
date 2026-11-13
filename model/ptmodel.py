@@ -15,6 +15,12 @@ class PTModel:
     evaluations: list
     model_configuration: ModelConfig
     dataset_configuration: DatasetConfig
+    branch_infos: dict[str, str]
+
+    @property
+    def parameters_count(self):
+        n_params = sum(tensor.numel() for tensor in self.model_state_dict.values())
+        return n_params
 
     @classmethod
     def from_checkpoint(cls, checkpoint):
@@ -26,7 +32,8 @@ class PTModel:
             losses=checkpoint["losses"],
             evaluations=checkpoint["evaluations"],
             model_configuration=ModelConfig.from_json(checkpoint["model_configuration"]),
-            dataset_configuration=DatasetConfig.from_json(checkpoint["dataset_configuration"])
+            dataset_configuration=DatasetConfig.from_json(checkpoint["dataset_configuration"]),
+            branch_infos=checkpoint["branch_infos"]
         )
 
     def to_json(self):
@@ -38,5 +45,6 @@ class PTModel:
             "losses": self.losses,
             "evaluations": self.evaluations,
             "model_configuration": self.model_configuration.to_json(),
-            "dataset_configuration": self.dataset_configuration.to_json()
+            "dataset_configuration": self.dataset_configuration.to_json(),
+            "branch_infos": self.branch_infos
         }

@@ -16,6 +16,7 @@ from .transforms import TrainingTransform, ValidationTransform
 from .commons import collate_fn
 from .evaluator import get_evaluator
 from .trainer import Trainer
+from commons.repository import branch_infos
 
 
 def seed_worker(worker_id):
@@ -154,7 +155,8 @@ def init_trainer(model_config: ModelConfig):
         test_dataloader=test_loader,
         model_config=model_config,
         dataset_config=dataset_config,
-        evaluator=evaluator
+        evaluator=evaluator,
+        branch_infos=branch_infos()
     )
     return trainer
 
