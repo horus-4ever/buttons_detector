@@ -27,10 +27,10 @@ def format_stats(stats: Dict[str, float]):
     Format the loss statistics to display to the user.
     """
     parts = [
-        f"loss={stats.get('loss', 0.0):.4f}",
-        f"ce={stats.get('ce_loss', 0.0):.4f}",
-        f"pair_L1={stats.get('L1_loss_pair', 0.0):.4f}",
-        f"pair_IoU={stats.get('GIoU_loss_pair', 0.0):.4f}"
+        f"Loss={stats.get('loss', 0.0):.2f}",
+        f"CE={stats.get('ce_loss', 0.0):.2f}",
+        f"L1={stats.get('L1_loss_pair', 0.0):.2f}",
+        f"IoU={stats.get('GIoU_loss_pair', 0.0):.2f}"
     ]
     return "(" + ", ".join(parts) + ")"
 
@@ -171,16 +171,20 @@ def train(model_config: ModelConfig, resume_path=None, save_weights_folder="chec
     start_epoch = trainer.epoch
     # training loop
     for epoch in range(start_epoch, start_epoch + num_epochs):
+        print(f"\033[1;34mEPOCH [{epoch + 1:<3} / {start_epoch + num_epochs}]\033[0m")
         # step one epoch of the trainer
         train_stats, val_stats, val_evaluation, test_evaluation = trainer.step()
         # display the epoch results
         print(
-            f"Epoch [{epoch + 1}/{start_epoch + num_epochs}] | "
+            "\033[1m  - STATS: "
             f"train {format_stats(train_stats)} | "
             f"val {format_stats(val_stats)}"
+            "\033[0m"
         )
         # save the last model, and the best one
         trainer.save_checkpoint(save_dir / "last.pt")
         if trainer.last_was_best:
             trainer.save_checkpoint(save_dir / "best.pt")
-            print(f"    New best model saved with val loss: {val_stats['loss']:.4f}")
+            print(f"  🟢 New best model saved with val loss: {val_stats['loss']:.4f}")
+        else:
+            print("  🟡 No new best model")

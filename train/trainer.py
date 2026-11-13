@@ -85,7 +85,9 @@ class Trainer:
         # store the accumulated losses
         running: Dict[str, float] = {}
         # epoch main loop
-        for images, padding_mask, annotations, (W, H) in self.dataloader:
+        n_images = len(self.dataloader)
+        for i, (images, padding_mask, annotations, (W, H)) in enumerate(self.dataloader):
+            print(f"\r\033[2K  - TRAIN: [{i + 1:<4} / {n_images}]", end="", flush=True)
             outputs, targets = runner.run_one(self.model, images, padding_mask, annotations, self.device)
             losses = self.criterion(outputs, targets)
             self.optimizer.zero_grad(set_to_none=True)
@@ -94,6 +96,7 @@ class Trainer:
             # accumulate the losses stored in the `losses` dict
             self._accumulate_losses(running, losses)
         # compute and return the mean of the losses over all batches
+        print("")
         nb_batches = len(self.dataloader)
         mean_losses = self._mean_losses(running, nb_batches)
         return mean_losses
@@ -116,15 +119,18 @@ class Trainer:
         return mean_losses
 
     @torch.inference_mode()
-    def _run_evaluation(self, dataloader):
+    def _run_evaluation(self, dataloader, what=""):
         self.model.eval()
         outputs = []
-        for images, padding_mask, annotations, (W, H) in dataloader:
+        n_images = len(dataloader)
+        for i, (images, padding_mask, annotations, (W, H)) in enumerate(dataloader):
+            print(f"\r\033[2K  - EVALUATE ({what}): [{i + 1:<4} / {n_images}]", end="", flush=True)
             annotations = annotations[0] # batch size is 1 for evaluation
             images = images.to(self.device, non_blocking=True)
             padding_mask = padding_mask.to(self.device, non_blocking=True)
             output = self.model(images, padding_mask, mode=Mode.EVALUATION)
             outputs.append((annotations, output))
+        print("")
         return self.evaluator.evaluate(outputs)
 
     @torch.inference_mode()
@@ -132,8 +138,8 @@ class Trainer:
         """
         Run evaluations on the validation and test datasets.
         """
-        validation_results = self._run_evaluation(self.val_dataloader)
-        test_results = self._run_evaluation(self.test_dataloader)
+        validation_results = self._run_evaluation(self.val_dataloader, what="validation")
+        test_results = self._run_evaluation(self.test_dataloader, what="test")
         return validation_results, test_results
 
     def step(self):

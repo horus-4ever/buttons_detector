@@ -512,12 +512,13 @@ class Evaluator:
         all_predictions = []
         results = {}
         # first, we need to put the predictions in the right format
+        n_images = len(outputs)
         for i, (annotation, output) in enumerate(outputs):
-            print(f"Image [{i + 1} / {len(outputs)}]", end="\r")
+            print(f"\r\033[2K  - COMPUTING EVALUATIONS: [{i + 1:<4} / {n_images}]", end="", flush=True)
             all_pairs.extend([PairWrapper(pair, image_id=annotation.image.url) for pair in annotation.cloth.pairs])
             predictions = Prediction.from_outputs(output, image_id=annotation.image.url)
             all_predictions.extend(predictions)
         for name, evaluation in self.evaluations.items():
             results[name] = evaluation.evaluate(all_predictions, all_pairs)
-        print()
+        print("")
         return results
