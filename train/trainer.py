@@ -175,24 +175,6 @@ class Trainer:
         self.epoch += 1
         return train_losses, val_losses, val_evaluation, test_evaluation
 
-    def resume(self, checkpoint_path: Path):
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-
-        saved_epoch = checkpoint.get("epoch", None)
-        if saved_epoch is None:
-            raise RuntimeError("The checkpoint does not contain an 'epoch' field.")
-
-        self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-
-        self.epoch = saved_epoch
-        self.best_val_loss = checkpoint.get("val_loss", float("inf"))
-        self.evaluations = checkpoint.get("evaluations", [])
-
     def save_checkpoint(self, save_path: Path):
         torch.save(
             {

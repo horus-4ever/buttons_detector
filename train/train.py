@@ -167,9 +167,6 @@ def train(model_config: ModelConfig, resume_path=None, save_weights_folder="chec
 
     trainer = init_trainer(model_config)
 
-    if resume_path is not None:
-        trainer.resume(Path(resume_path))
-
     num_epochs = model_config.training_parameters.num_epochs
     start_epoch = trainer.epoch
     # training loop
