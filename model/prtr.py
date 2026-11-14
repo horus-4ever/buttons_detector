@@ -52,7 +52,7 @@ class PRTR(nn.Module):
             dropout=dropout,
             activation=activation
         )
-        self.query_embed = nn.Embedding(num_queries, self.d_model)
+        self.query_embed = nn.Embedding(num_queries, self.d_model * 2)
         # NEW: The reference point embedding is there to encode the difference between a button and a hole.
         #      It is applied to all reference points on top of the query_embed, which encodes the pair information.
         self.refpoints_embed = nn.Embedding(nrefpointsperquery, self.d_model)
@@ -132,7 +132,7 @@ class PRTR(nn.Module):
             features=feature_maps, # num_levels * [B, embed_dim, Hl, Wl]
             masks=multilevel_masks, # num_levels * [B, 1, Hl, Wl]
             pos_embeds=position_embeddings, # num_levels * [B, embed_dim, Hl, Wl]
-            query_embed=self.query_embed.weight, # [num_queries, embed_dim]
+            query_embed=self.query_embed.weight, # [num_queries, embed_dim * 2]
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, query_len, embed_dim]

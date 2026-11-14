@@ -45,6 +45,7 @@ class DeformableTransformer(nn.Module):
             dropout=dropout,
             activation=activation
         )
+        self.d_model = d_model
         # level embedding is learned
         self.level_embed = nn.Parameter(torch.Tensor(nlevels, d_model))
         nn.init.normal_(self.level_embed) # initializa the values
@@ -55,7 +56,7 @@ class DeformableTransformer(nn.Module):
     def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
         - features: num_levels * [B, embed_dim, Hl, Wl]
-        - query_embed: [num_queries, embed_dim]
+        - query_embed: [num_queries, embed_dim * 2]
         - refpoints_embed: [RpQ, embed_dim]
         - pos_embeds: num_levels * [B, embed_dim, Hl, Wl]
         - masks: num_levels * [B, 1, Hl, Wl]
@@ -100,13 +101,13 @@ class DeformableTransformer(nn.Module):
 
         B, Q, C = memory.size()
         # now prepare the input to the decoder
-        # [num_queries, embed_dim]
-        object_queries = torch.zeros_like(query_embed)
+        # 2 * [num_queries, embed_dim]
+        object_embed, object_queries = torch.split(query_embed, self.d_model, 1)
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
         # now we get the reference points by linear projection
         # [Q, C] -> [Q, 1, C]
-        query_tokens = query_embed[:, None, :]
+        query_tokens = object_embed[:, None, :]
         # [RqP, C] -> [1, RqP, C]
         role_tokens = refpoints_embed[None, :, :]
         # [Q, RqP, C]
@@ -118,7 +119,7 @@ class DeformableTransformer(nn.Module):
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
             reference_points=reference_points, # [query_len, RpQ, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
-            query_embed=query_embed, # [num_queries, embed_dim]
+            query_embed=object_embed, # [num_queries, embed_dim]
             refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
             memory_key_padding_mask=mask_flatten, # [B, 1, suml(Hl * Wl)]
         )
