@@ -17,7 +17,7 @@
     "training": {
         "dataset": "experiments/datasets/sim_p3.dataset.json",
         "finetune": null,
-        "batch_size": 1,
+        "batch_size": 3,
         "num_epochs": 40,
         "lr": 1e-4,
         "weight_decay": 1e-4,
