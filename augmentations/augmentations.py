@@ -9,6 +9,7 @@ from copy import deepcopy
 import os
 import random
 from PIL import Image, ImageDraw, ImageOps
+from torchvision.transforms import v2
 
 from dataformat.dataformat import Annotation, BoundingBox
 
@@ -22,7 +23,9 @@ def _get_transforms_list():
     return (
         RandomMasking,
         RandomFlip,
-        RandomQuarterTurn
+        RandomQuarterTurn,
+        GaussianBlur,
+        ColorJitter
     )
 
 def _get_transform_by_name(name):
@@ -30,7 +33,7 @@ def _get_transform_by_name(name):
     for elem in transforms:
         if elem.__name__ == name:
             return elem
-    raise Exception()
+    raise Exception(f"Transformation '{name}' does not exist.")
 
 
 def get_transforms(data: list) -> list["Transform"]:
@@ -192,7 +195,7 @@ class RandomMasking(Transform):
             min_height=data["min_height"],
             max_height=data["max_height"],
             max_rectangles=data["max_rectangles"],
-            fill=data.get("fill", (0, 0, 0))
+            fill=tuple(data.get("fill", (0, 0, 0)))
         )
 
     def to_json(self) -> dict:
@@ -234,7 +237,10 @@ class RandomMasking(Transform):
             return out, new_labels
 
     def _box_percentage(self, box, mask):
-        return _box_area(_box_intersection(box, mask)) / _box_area(box)
+        area = _box_area(box)
+        if area <= 0.:
+            return 0.
+        return _box_area(_box_intersection(box, mask)) / area
 
     def _update_labels(self, labels: Annotation, rect: tuple[float, float, float, float], W, H):
         """
@@ -255,9 +261,77 @@ class RandomMasking(Transform):
             kept_pairs.append(pair)
         labels.cloth.pairs = kept_pairs
 
+# ---------------------------------------------------------------------------
+# Other Transforms
+# ---------------------------------------------------------------------------
+class GaussianBlur(Transform):
+    def __init__(self, p: float, kernel_size: int, sigma: list[float]):
+        self.p = p
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+
+    @classmethod
+    def from_json(cls, data: dict) -> "GaussianBlur":
+        return cls(
+            p=data["p"],
+            kernel_size=data["kernel_size"],
+            sigma=data["sigma"]
+        )
+
+    def to_json(self):
+        return {
+            "p": self.p,
+            "kernel_size": self.kernel_size,
+            "sigma": self.sigma
+        }
+    
+    def __call__(self, image: Image.Image, labels: Annotation,) -> tuple[Image.Image, Annotation]:
+        new_labels = _clone_annotation(labels)
+        if random.random() >= self.p:
+            return image, new_labels
+        transformation = v2.GaussianBlur(self.kernel_size, self.sigma)
+        transformed = transformation(image)
+        return transformed, new_labels
+
+
+class ColorJitter(Transform):
+    def __init__(self, p: float, brightness: float, contrast: float, saturation: float, hue: float):
+        self.p = p
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+        self.hue = hue
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ColorJitter":
+        return cls(
+            p=data["p"],
+            brightness=data["brightness"],
+            contrast=data["contrast"],
+            saturation=data["saturation"],
+            hue=data["hue"]
+        )
+
+    def to_json(self):
+        return {
+            "p": self.p,
+            "brightness": self.brightness,
+            "contrast": self.contrast,
+            "saturation": self.saturation,
+            "hue": self.hue
+        }
+    
+    def __call__(self, image: Image.Image, labels: Annotation,) -> tuple[Image.Image, Annotation]:
+        new_labels = _clone_annotation(labels)
+        if random.random() >= self.p:
+            return image, new_labels
+        transformation = v2.ColorJitter(self.brightness, self.contrast, self.saturation, self.hue)
+        transformed = transformation(image)
+        return transformed, new_labels
+
 
 # ---------------------------------------------------------------------------
-# Geometric transforms
+# Geometric Transforms
 # ---------------------------------------------------------------------------
 
 class RandomFlip(Transform):
@@ -285,7 +359,7 @@ class RandomFlip(Transform):
             case "horizontal":
                 return BoundingBox.from_x1y1x2y2(1.0 - x2, y1, 1.0 - x1, y2)
             case "vertical":
-                return BoundingBox.from_x1y1x2y2(x1, 1.0 - y1, x2, 1.0 - y2)
+                return BoundingBox.from_x1y1x2y2(x1, 1.0 - y2, x2, 1.0 - y1)
             case _: raise Exception("Unreachable")
 
     def _update_labels(self, labels: Annotation):
