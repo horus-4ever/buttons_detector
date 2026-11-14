@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from copy import deepcopy
+import math
 import os
 import random
 from PIL import Image, ImageDraw, ImageOps
+from torchvision.transforms import v2
 
 from dataformat.dataformat import Annotation, BoundingBox
 
@@ -22,7 +24,11 @@ def _get_transforms_list():
     return (
         RandomMasking,
         RandomFlip,
-        RandomQuarterTurn
+        RandomQuarterTurn,
+        GaussianBlur,
+        ColorJitter,
+        HorizontalShift,
+        VerticalShift
     )
 
 def _get_transform_by_name(name):
@@ -30,7 +36,7 @@ def _get_transform_by_name(name):
     for elem in transforms:
         if elem.__name__ == name:
             return elem
-    raise Exception()
+    raise Exception(f"Transformation '{name}' does not exist.")
 
 
 def get_transforms(data: list) -> list["Transform"]:
@@ -192,7 +198,7 @@ class RandomMasking(Transform):
             min_height=data["min_height"],
             max_height=data["max_height"],
             max_rectangles=data["max_rectangles"],
-            fill=data.get("fill", (0, 0, 0))
+            fill=tuple(data.get("fill", (0, 0, 0)))
         )
 
     def to_json(self) -> dict:
@@ -234,7 +240,10 @@ class RandomMasking(Transform):
             return out, new_labels
 
     def _box_percentage(self, box, mask):
-        return _box_area(_box_intersection(box, mask)) / _box_area(box)
+        area = _box_area(box)
+        if area <= 0.:
+            return 0.
+        return _box_area(_box_intersection(box, mask)) / area
 
     def _update_labels(self, labels: Annotation, rect: tuple[float, float, float, float], W, H):
         """
@@ -255,9 +264,77 @@ class RandomMasking(Transform):
             kept_pairs.append(pair)
         labels.cloth.pairs = kept_pairs
 
+# ---------------------------------------------------------------------------
+# Other Transforms
+# ---------------------------------------------------------------------------
+class GaussianBlur(Transform):
+    def __init__(self, p: float, kernel_size: int, sigma: list[float]):
+        self.p = p
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+
+    @classmethod
+    def from_json(cls, data: dict) -> "GaussianBlur":
+        return cls(
+            p=data["p"],
+            kernel_size=data["kernel_size"],
+            sigma=data["sigma"]
+        )
+
+    def to_json(self):
+        return {
+            "p": self.p,
+            "kernel_size": self.kernel_size,
+            "sigma": self.sigma
+        }
+    
+    def __call__(self, image: Image.Image, labels: Annotation,) -> tuple[Image.Image, Annotation]:
+        new_labels = _clone_annotation(labels)
+        if random.random() >= self.p:
+            return image, new_labels
+        transformation = v2.GaussianBlur(self.kernel_size, self.sigma)
+        transformed = transformation(image)
+        return transformed, new_labels
+
+
+class ColorJitter(Transform):
+    def __init__(self, p: float, brightness: float, contrast: float, saturation: float, hue: float):
+        self.p = p
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+        self.hue = hue
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ColorJitter":
+        return cls(
+            p=data["p"],
+            brightness=data["brightness"],
+            contrast=data["contrast"],
+            saturation=data["saturation"],
+            hue=data["hue"]
+        )
+
+    def to_json(self):
+        return {
+            "p": self.p,
+            "brightness": self.brightness,
+            "contrast": self.contrast,
+            "saturation": self.saturation,
+            "hue": self.hue
+        }
+    
+    def __call__(self, image: Image.Image, labels: Annotation,) -> tuple[Image.Image, Annotation]:
+        new_labels = _clone_annotation(labels)
+        if random.random() >= self.p:
+            return image, new_labels
+        transformation = v2.ColorJitter(self.brightness, self.contrast, self.saturation, self.hue)
+        transformed = transformation(image)
+        return transformed, new_labels
+
 
 # ---------------------------------------------------------------------------
-# Geometric transforms
+# Geometric Transforms
 # ---------------------------------------------------------------------------
 
 class RandomFlip(Transform):
@@ -285,7 +362,7 @@ class RandomFlip(Transform):
             case "horizontal":
                 return BoundingBox.from_x1y1x2y2(1.0 - x2, y1, 1.0 - x1, y2)
             case "vertical":
-                return BoundingBox.from_x1y1x2y2(x1, 1.0 - y1, x2, 1.0 - y2)
+                return BoundingBox.from_x1y1x2y2(x1, 1.0 - y2, x2, 1.0 - y1)
             case _: raise Exception("Unreachable")
 
     def _update_labels(self, labels: Annotation):
@@ -362,6 +439,162 @@ class RandomQuarterTurn(Transform):
             self._update_labels(new_labels, "rotate_270")
         return rotated, new_labels
 
+
+class _RandomShift(Transform):
+    """
+    Base class for horizontal and vertical image shifts.
+
+    The displacement is randomly selected within
+    [-max_displacement, max_displacement].
+
+    The displacement is then capped so that no bounding box
+    extends outside the image boundaries.
+
+    Bounding boxes are translated with the image.
+    Their dimensions and visibility flags remain unchanged.
+
+    max_displacement is normalized between 0 and 1.
+    """
+    axis: str
+
+    def __init__(self, p: float, max_displacement: float, fill=(0, 0, 0),):
+        super().__init__()
+        if not 0.0 <= p <= 1.0:
+            raise ValueError("p must be between 0 and 1")
+        if not 0.0 <= max_displacement <= 1.0:
+            raise ValueError("max_displacement must be between 0 and 1")
+        self.p = p
+        self.max_displacement = max_displacement
+        # JSON deserialization converts tuples into lists.
+        self.fill = tuple(fill) if isinstance(fill, list) else fill
+
+    @classmethod
+    def from_json(cls, data: dict):
+        return cls(
+            p=data["p"],
+            max_displacement=data["max_displacement"],
+            fill=data.get("fill", (0, 0, 0))
+        )
+
+    def to_json(self) -> dict:
+        return {
+            "p": self.p,
+            "max_displacement": self.max_displacement,
+            "fill": self.fill
+        }
+
+    def _get_boxes(self, labels: Annotation):
+        """
+        Return all bounding boxes in normalized xyxy format.
+
+        Both buttons and counterparts are included,
+        regardless of their visibility.
+        """
+        boxes = []
+        for pair in labels.cloth.pairs:
+            boxes.append(pair.button.bbox.to_x1y1x2y2())
+            boxes.append(pair.counterpart.bbox.to_x1y1x2y2())
+        return boxes
+
+    def _cap_displacement(self, displacement: int, boxes: list, size: int,) -> int:
+        """
+        Cap the requested pixel displacement to ensure
+        that no bounding box leaves the image.
+
+        size is the image width for horizontal shifts,
+        or height for vertical shifts.
+        """
+        if not boxes or displacement == 0:
+            return displacement
+        # Select the relevant coordinates
+        if self.axis == "horizontal":
+            min_idx, max_idx = 0, 2
+        else:
+            min_idx, max_idx = 1, 3
+        if displacement > 0:
+            # Distance between the furthest annotation
+            # and the positive image boundary.
+            max_coord = max(box[max_idx] for box in boxes)
+            available = max(0, math.floor((1.0 - max_coord) * size + 1e-9))
+            return min(displacement, available)
+        else:
+            # Distance between the nearest annotation
+            # and the negative image boundary.
+            min_coord = min(box[min_idx] for box in boxes)
+            available = max(0, math.floor(min_coord * size + 1e-9))
+            return max(displacement, -available)
+
+    def _update_labels(self, labels: Annotation, displacement: float,):
+        """
+        Translate all bounding boxes by the normalized
+        displacement.
+
+        Bounding-box widths and heights are preserved.
+        """
+        for pair in labels.cloth.pairs:
+            for obj in (pair.button, pair.counterpart):
+                x1, y1, x2, y2 = obj.bbox.to_x1y1x2y2()
+                if self.axis == "horizontal":
+                    x1 += displacement
+                    x2 += displacement
+                else:
+                    y1 += displacement
+                    y2 += displacement
+                obj.bbox = BoundingBox.from_x1y1x2y2(x1, y1, x2, y2)
+
+    def __call__(self, image: Image.Image, labels: Annotation,) -> tuple[Image.Image, Annotation]:
+        new_labels = _clone_annotation(labels)
+        if random.random() >= self.p:
+            return image, new_labels
+        W, H = image.size
+        # Image dimension corresponding to the shift axis
+        size = W if self.axis == "horizontal" else H
+        # Maximum displacement in whole pixels
+        max_pixels = math.floor(self.max_displacement * size + 1e-9)
+        # Choose a random signed displacement
+        displacement = random.randint(-max_pixels,max_pixels)
+        if displacement == 0:
+            return image, new_labels
+        # Get all annotations
+        boxes = self._get_boxes(new_labels)
+        # Cap displacement according to annotation positions
+        displacement = self._cap_displacement(displacement, boxes,size)
+        if displacement == 0:
+            return image, new_labels
+        # Compute horizontal and vertical pixel displacements
+        if self.axis == "horizontal":
+            dx, dy = displacement, 0
+        else:
+            dx, dy = 0, displacement
+        # Create a new image filled with the background color
+        out = Image.new(image.mode, image.size, color=_coerce_fill(image, self.fill))
+        # Translate the original image.
+        # PIL automatically clips pixels outside the canvas.
+        out.paste(image, (dx, dy))
+        # Convert the actual pixel shift to normalized coordinates
+        normalized_displacement = displacement / size
+        # Translate annotations by the same displacement
+        self._update_labels(
+            new_labels,
+            normalized_displacement
+        )
+        return out, new_labels
+
+
+class HorizontalShift(_RandomShift):
+    """
+    Randomly shift an image horizontally without
+    cropping any annotation.
+    """
+    axis = "horizontal"
+
+
+class VerticalShift(_RandomShift):
+    """
+    Randomly shift an image vertically without
+    cropping any annotation.
+    """
+    axis = "vertical"
 
 # ---------------------------------------------------------------------------
 # Debug transform
