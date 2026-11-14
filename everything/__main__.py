@@ -6,6 +6,7 @@ from dataformat.dataset import DatasetConfig
 import json
 from argparse import ArgumentParser
 from train.train import train
+from commons.repository import REPO
 
 
 def try_load_model_config(path: Path):
@@ -65,7 +66,7 @@ class Experiment:
         print("All is good, ready for training.")
 
     def _git_change_branch(self):
-        pass
+        pass # changing branches might not be a good idea, so do per-branch
 
     def _launch_training(self, context: "Everything"):
         model_config_path = (context.models / f"{self.name}.config.json")
