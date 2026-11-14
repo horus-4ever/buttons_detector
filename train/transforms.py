@@ -16,6 +16,7 @@ class TrainingTransform(Transform):
         transform = ComposeWithLabels([
             ComposeWrapper(T.Resize((self.img_size, self.img_size))),
             *self.transforms,
+            SaveImage("test_images_uwu"),
             ComposeWrapper(T.ToTensor()),
             ComposeWrapper(T.Normalize(
                 mean=[0.485, 0.456, 0.406],
