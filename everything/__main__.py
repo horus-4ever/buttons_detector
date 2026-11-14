@@ -85,16 +85,13 @@ class Experiment:
 class Everything:
     models: Path
     experiments: list[Experiment]
-    reports: Path
 
     @classmethod
     def from_json(cls, json_data: dict):
         models = Path(json_data["models"])
-        reports = Path(json_data["reports"])
         return cls(
             models=models,
-            experiments=[Experiment.from_json(experiment) for experiment in json_data["runs"]],
-            reports=reports
+            experiments=[Experiment.from_json(experiment) for experiment in json_data["runs"]]
         )
 
     def check(self):
