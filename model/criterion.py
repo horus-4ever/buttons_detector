@@ -199,7 +199,7 @@ class SetCriterion(nn.Module):
         src_pair_ordering = outputs["pred_ordering"].squeeze(-1) # [B, Q, 1] -> [B, Q]
         losses = []
         for b, (src_idx, tgt_idx) in enumerate(indices):
-            if len(src_idx) == 0:
+            if len(src_idx) < 2:
                 continue
             # now for the indices
             pred_ordering = src_pair_ordering[b, src_idx]
