@@ -32,7 +32,8 @@ def format_stats(stats: Dict[str, float]):
         f"Loss={stats.get('loss', 0.0):.2f}",
         f"CE={stats.get('ce_loss', 0.0):.2f}",
         f"L1={stats.get('L1_loss_pair', 0.0):.2f}",
-        f"IoU={stats.get('GIoU_loss_pair', 0.0):.2f}"
+        f"IoU={stats.get('GIoU_loss_pair', 0.0):.2f}",
+        f"Odg={stats.get('Ordering_loss', 0.0):.2f}"
     ]
     return "(" + ", ".join(parts) + ")"
 

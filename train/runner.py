@@ -4,11 +4,12 @@ from dataformat.dataformat import Annotation
 def annotations_to_tensor(annotations: list[Annotation], device):
     targets = []
     for annotation in annotations:
-        classes, coord_buttons, coord_counterparts, *_ = annotation.to_tensor(device=device)
+        classes, coord_buttons, coord_counterparts, ordering, *_ = annotation.to_tensor(device=device)
         targets.append({
             "labels": classes,
             "buttons": coord_buttons,
-            "counterparts": coord_counterparts
+            "counterparts": coord_counterparts,
+            "ordering": ordering
         })
     return targets
 

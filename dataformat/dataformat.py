@@ -264,7 +264,8 @@ class Annotation:
         visibility_counterpart = torch.tensor([label.counterpart.visible for label in pairs], dtype=torch.float, device=device)
         visibility_button = torch.tensor([label.button.visible for label in pairs], dtype=torch.float, device=device)
         classes = torch.zeros(labels_button.size()[0], dtype=torch.long, device=device)
-        return classes, labels_button, labels_counterpart, visibility_button, visibility_counterpart
+        ordering = torch.tensor(list(range(1, len(self.cloth.pairs) + 1)))
+        return classes, labels_button, labels_counterpart, ordering, visibility_button, visibility_counterpart
 
     def to_json(self):
         return {

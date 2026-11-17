@@ -180,6 +180,46 @@ class SetCriterion(nn.Module):
         pair_losses.update(GIoU_losses)
         return pair_losses
 
+    def ordering_loss(self, outputs, targets, indices):
+        """
+        Compute the ordering loss, between each pair.
+        Let's consider that we have the following values:
+        - tgt_ordering = [2, 1, 3]
+        - pred_ordering = [4.2, 2.5, 2.8]
+        After sorting in order of the tgt_ordering, we have:
+        - pred_ordering_sorted = [2.5, 4.2, 2.8]
+        The second pair doesn't predict the right ordering because 4.2 > 2.8.
+        We need to penalize that, but not penalize the fact that the first pair is well ordered.
+        Then, we have:
+           loss = F.softplus([2.5 - 4.2, 4.2 - 2.8]).mean()
+                = F.softplus([-1.7, 1.4]).mean()
+                = 0.8941
+        In order to provide a better signal, we compute the differences between all pairs.
+        """
+        src_pair_ordering = outputs["pred_ordering"].squeeze(-1) # [B, Q, 1] -> [B, Q]
+        losses = []
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if len(src_idx) == 0:
+                continue
+            # now for the indices
+            pred_ordering = src_pair_ordering[b, src_idx]
+            tgt_ordering = targets[b]["ordering"][tgt_idx].to(pred_ordering.device)
+            ordering_indices = torch.argsort(tgt_ordering)
+            pred_ordering_sorted = pred_ordering[ordering_indices]
+            # compute the differences
+            differences = pred_ordering_sorted[:, None] - pred_ordering_sorted[None, :] # [N, N]
+            mask = torch.triu(torch.ones_like(differences, dtype=torch.bool), diagonal=1)
+            loss = F.softplus(differences[mask]).mean(dim=-1)
+            losses.append(loss)
+        if losses:
+            final_loss = torch.stack(losses).mean()
+        else:
+            final_loss = torch.tensor(0.0, device=src_pair_ordering.device)
+        return {
+            "Ordering_loss": final_loss
+        }
+
+
     def L1_loss(self, pred_button_coords, target_button_coords, pred_counterpart_coords, target_counterpart_coords):
         """
         Compute the L1 loss.
@@ -237,11 +277,13 @@ class SetCriterion(nn.Module):
         losses = {}
         losses.update(self.class_loss(outputs, targets, indices))
         losses.update(self.pair_loss(outputs, targets, indices))
+        losses.update(self.ordering_loss(outputs, targets, indices))
         # the total loss is the weighted sum of the losses
         total_loss = (
             losses["ce_loss"] * self.weight_dict["cost_ce"] +
             losses["L1_loss_pair"] * self.weight_dict["cost_l1"] +
-            losses["GIoU_loss_pair"] * self.weight_dict["cost_giou"]
+            losses["GIoU_loss_pair"] * self.weight_dict["cost_giou"] +
+            losses["Ordering_loss"]
         )
         losses["loss"] = total_loss
         return losses

@@ -60,6 +60,7 @@ class PRTR(nn.Module):
         self.class_head = nn.Linear(self.d_model, num_classes + 1)
         # NEW: the button head now predicts the bounding box
         self.pred_head = MLP(self.d_model, mlp_hidden_dim, 4, mlp_num_layers)
+        self.ordering_head = nn.Linear(nrefpointsperquery * self.d_model, 1)
         self._reset_parameters()
 
     def train(self, mode: bool = True):
@@ -135,13 +136,16 @@ class PRTR(nn.Module):
             query_embed=self.query_embed.weight, # [num_queries, embed_dim * 2]
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
-        # hs: [B, query_len, embed_dim]
+        # hs: [B, query_len, RpQ, embed_dim]
         # reference_points: [num_queries, RpQ, 4]
         Q, num_ref_points_per_query, _ = reference_points.size()
         # NEW: the button head now predicts the bounding box
         # -> [B, Q, embed_dim]
         class_head_input = hs.mean(dim=2) # take the mean over RpQ
         pred_logits = self.class_head(class_head_input) # [B, num_queries, num_classes+1]
+        # ordering head input
+        ordering_head_input = hs.view(B, Q, num_ref_points_per_query * self.d_model)
+        pred_ordering = self.ordering_head(ordering_head_input)
         # for the buttons we of course need to keep by RpQ
         # [B, query_len, RpQ, 4]
         deltas = self.pred_head(hs) # [B, Q, RpQ, 4]
@@ -155,7 +159,8 @@ class PRTR(nn.Module):
         if mode == Mode.DEBUG:
             return {
                 "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
-                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
+                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4],
+                "pred_ordering": pred_ordering, # [B, Q, 1]
                 "encoder_attn_maps": encoder_attn_maps, # encoder_layers * [batch, sum_l(Hl * Wl), heads, num_levels, num_points]
                 "encoder_sampling_locations": encoder_sampling_locations, # [batch, sum_l(Hl * Wl), heads, num_levels, num_points, 2]
                 "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
@@ -168,12 +173,14 @@ class PRTR(nn.Module):
             return {
                 "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
                 "pred_boxes": pred_boxes, # [B, Q, RpQ, 4],
+                "pred_ordering": pred_ordering, # [B, Q, 1]
                 "image_size": (H, W)
             }
         elif mode == Mode.TRAINING:
             return {
                 "pred_logits": pred_logits, # [B, num_queries, num_classes+1]
-                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4],
+                "pred_boxes": pred_boxes, # [B, Q, RpQ, 4]
+                "pred_ordering": pred_ordering, # [B, Q, 1]
                 "image_size": (H, W)
             }
 
