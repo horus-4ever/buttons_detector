@@ -1,0 +1,17 @@
+{
+    "models": "experiments/models/",
+    "runs": [
+        {
+            "name": "sim+real_p1",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_p2",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_p3",
+            "branch": "paper_model"
+        }
+    ]
+}
