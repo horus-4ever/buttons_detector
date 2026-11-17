@@ -2,15 +2,15 @@
     "models": "experiments/models/",
     "runs": [
         {
-            "name": "real_p1",
+            "name": "sim+real_p1",
             "branch": "paper_model"
         },
         {
-            "name": "real_p2",
+            "name": "sim+real_p2",
             "branch": "paper_model"
         },
         {
-            "name": "real_p3",
+            "name": "sim+real_p3",
             "branch": "paper_model"
         }
     ]

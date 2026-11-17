@@ -1,5 +1,5 @@
 {
-    "name": "real_p3",
+    "name": "sim+real_p1_baseline",
     "model_parameters": {
         "num_classes": 1,
         "num_queries": 100,
@@ -15,8 +15,8 @@
         "mlp_num_layers": 3
     },
     "training": {
-        "dataset": "experiments/datasets/real_p3.dataset.json",
-        "finetune": "checkpoints/sim_p1/sim_p1.pt",
+        "dataset": "experiments/datasets/real_p1.dataset.json",
+        "finetune": "checkpoints/sim_p1_baseline/sim_p1_baseline.pt",
         "batch_size": 3,
         "num_epochs": 40,
         "lr": 1e-4,

@@ -1,5 +1,5 @@
 {
-    "name": "real_p2",
+    "name": "sim+real_p3",
     "model_parameters": {
         "num_classes": 1,
         "num_queries": 100,
@@ -15,7 +15,7 @@
         "mlp_num_layers": 3
     },
     "training": {
-        "dataset": "experiments/datasets/real_p2.dataset.json",
+        "dataset": "experiments/datasets/real_p3.dataset.json",
         "finetune": "checkpoints/sim_p1/sim_p1.pt",
         "batch_size": 3,
         "num_epochs": 40,

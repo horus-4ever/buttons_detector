@@ -2,15 +2,15 @@
     "models": "experiments/models/",
     "runs": [
         {
-            "name": "real_p1_baseline",
+            "name": "sim+real_p1_baseline",
             "branch": "paper_model_baseline"
         },
         {
-            "name": "real_p2_baseline",
+            "name": "sim+real_p2_baseline",
             "branch": "paper_model_baseline"
         },
         {
-            "name": "real_p3_baseline",
+            "name": "sim+real_p3_baseline",
             "branch": "paper_model_baseline"
         }
     ]
