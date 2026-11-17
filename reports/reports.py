@@ -119,8 +119,9 @@ class Report:
     def from_json(cls, json_data: dict):
         root = Path(json_data["root"])
         models = {}
-        for model_name in json_data["models"]:
-            path = root / f"{model_name}.pt"
+        for model in json_data["models"]:
+            model_name, model_path = model["name"], model["path"]
+            path = root / model_path
             model = load_weights(path, device=torch.device("cpu"))
             models[model_name] = PTModelData.from_checkpoint(model)
         reports = [ReportRequest.from_json(report_data, models) for report_data in json_data["reports"]]
@@ -148,8 +149,9 @@ class Report:
                 mean = np.mean(line_data, axis=0)
                 min = np.min(line_data, axis=0)
                 max = np.max(line_data, axis=0)
+                std = np.std(line_data, axis=0)
                 sns.lineplot(x=x, y=mean, ax=ax, label=f"{group_name} - {line_name}")
-                ax.fill_between(x, min, max, alpha=0.2)
+                ax.fill_between(x, mean - std, mean + std, alpha=0.2)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.set_title(report.title)
         ax.set_xlabel("Epochs")
