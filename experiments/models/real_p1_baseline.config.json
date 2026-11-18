@@ -15,7 +15,7 @@
         "mlp_num_layers": 3
     },
     "training": {
-        "dataset": "experiments/datasets/real_p1_baseline.dataset.json",
+        "dataset": "experiments/datasets/real_p1.dataset.json",
         "finetune": null,
         "batch_size": 3,
         "num_epochs": 40,
