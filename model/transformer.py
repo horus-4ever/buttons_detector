@@ -3,6 +3,8 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
+
+from model.utils import MLP
 from .encoder import Encoder
 from .decoder import Decoder
 
@@ -51,7 +53,7 @@ class DeformableTransformer(nn.Module):
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
-        self.proj_reference_points = nn.Linear(d_model, 2)
+        self.proj_reference_points = MLP(2 * d_model, d_model, 2, 2)
 
     def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
@@ -99,7 +101,9 @@ class DeformableTransformer(nn.Module):
             src_key_padding_mask=mask_flatten, # [B, 1, sum_l(Hl, Wl)]
         ) # [B, sum_l(Hl * Wl), embed_dim]
 
-        B, Q, C = memory.size()
+        B, _, C = memory.size()
+        Q, _ = query_embed.size()
+        RpQ, _ = refpoints_embed.size()
         # now prepare the input to the decoder
         # 2 * [num_queries, embed_dim]
         object_embed, object_queries = torch.split(query_embed, self.d_model, 1)
@@ -110,10 +114,17 @@ class DeformableTransformer(nn.Module):
         query_tokens = object_embed[:, None, :]
         # [RqP, C] -> [1, RqP, C]
         role_tokens = refpoints_embed[None, :, :]
-        # [Q, RqP, C]
+        # [Q, RqP, C] -> [B, Q, RpQ, C]
         token_embed = query_tokens + role_tokens # we construct from both query and reference points embedings
+        token_embed = token_embed[None, :, :, :].expand(B, -1, -1, -1)
+        # [B, C] -> [B, Q, RpQ, C]
+        memory_flatten = memory.mean(1)
+        memory_flatten = memory_flatten[:, None, None, :].expand(-1, Q, RpQ, -1)
+        # concatenate the token embed and the memory
+        # [B, Q, RpQ, 2 * C]
+        refpoint_input = torch.cat([token_embed, memory_flatten], dim=-1)
         # [Q, RqP, 2]
-        reference_points = self.proj_reference_points(token_embed).sigmoid()
+        reference_points = self.proj_reference_points(refpoint_input).sigmoid()
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
