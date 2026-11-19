@@ -64,6 +64,12 @@ class DeformableTransformer(nn.Module):
         self.initial_attention_dropout = nn.Dropout(dropout)
         self.proj_initial_reference_points = nn.Linear(d_model, 2)
         self.proj_reference_points = nn.Linear(d_model, 4)
+        # reset the parameters
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        nn.init.normal_(self.proj_reference_points.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(self.proj_reference_points.bias)
 
     def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
@@ -128,15 +134,16 @@ class DeformableTransformer(nn.Module):
         # [B, num_queries, embed_dim]
         q_memory = object_queries + object_embed
         # [B, Q, 2]
-        initial_reference_points = self.proj_initial_reference_points(q_memory).sigmoid()
+        initial_reference_points = self.proj_initial_reference_points(q_memory)
         # [B, Q, 2] -> [B, Q, num_levels, 2]
-        initial_reference_points = initial_reference_points[:, :, None, :].expand(B, Q, self.num_levels, 2)
+        initial_reference_points_exp = initial_reference_points[:, :, None, :].expand(B, Q, self.num_levels, 2).sigmoid()
         # compute self-attention
         memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.initial_mem_attention(
             query=q_memory, # [B, num_queries, embed_dim]
-            reference_points=initial_reference_points, # [B, Q, num_levels, 2]
+            reference_points=initial_reference_points_exp, # [B, Q, num_levels, 2]
             values=v_memory, # [B, Q, embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
+            key_padding_mask=mask_flatten
         ) # [B, Q, embed_dim]
         refpoint_features = q_memory + self.initial_attention_dropout(memory_attention_out)
         refpoint_features = self.initial_attention_norm(refpoint_features)
@@ -144,7 +151,9 @@ class DeformableTransformer(nn.Module):
         # [B, Q, 4]
         reference_points = self.proj_reference_points(refpoint_features)
         # [B, Q, 4] -> [B, Q, RpQ, 2]
-        reference_points = reference_points.reshape(B, Q, RPQ, 2).sigmoid()
+        reference_points = reference_points.reshape(B, Q, RPQ, 2)
+        reference_points = initial_reference_points[:, :, None, :] + reference_points
+        reference_points = reference_points.sigmoid()
 
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
