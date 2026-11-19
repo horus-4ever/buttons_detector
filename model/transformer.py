@@ -1,5 +1,7 @@
 import torch
 from torch import nn
+
+from model.attention import MultiscaleDeformableAttention
 from .encoder import Encoder
 from .decoder import Decoder
 
@@ -46,7 +48,22 @@ class DeformableTransformer(nn.Module):
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
+        self.initial_mem_attention = MultiscaleDeformableAttention(
+            embed_dim=d_model,
+            num_heads=nheads,
+            num_levels=nlevels,
+            num_points=npoints
+        )
+        self.initial_attention_norm = nn.LayerNorm(d_model)
+        self.initial_attention_dropout = nn.Dropout(dropout)
+        self.proj_initial_reference_points = nn.Linear(d_model, 2)
         self.proj_reference_points = nn.Linear(d_model, 2)
+        # reset the parameters
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        nn.init.normal_(self.proj_reference_points.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(self.proj_reference_points.bias)
 
     def forward(self, features, query_embed, pos_embeds, masks):
         """
@@ -99,9 +116,34 @@ class DeformableTransformer(nn.Module):
         object_embed, object_queries = torch.split(query_embed, self.d_model, 1)
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        # now we get the reference points by linear projection
-        # [Q, 2]
-        reference_points = self.proj_reference_points(object_embed).sigmoid()
+
+
+        # now we want to get the initial reference points
+        # we want it to be grounded in the encoder memory
+        # computes v, k and q for memory attention
+        v_memory = memory # [B, query_len, embed_dim]
+        # [B, num_queries, embed_dim]
+        q_memory = object_queries + object_embed
+        # [B, Q, 2]
+        initial_reference_points = self.proj_initial_reference_points(q_memory)
+        # [B, Q, 2] -> [B, Q, num_levels, 2]
+        initial_reference_points_exp = initial_reference_points[:, :, None, :].expand(B, Q, self.num_levels, 2).sigmoid()
+        # compute self-attention
+        memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.initial_mem_attention(
+            query=q_memory, # [B, num_queries, embed_dim]
+            reference_points=initial_reference_points_exp, # [B, Q, num_levels, 2]
+            values=v_memory, # [B, Q, embed_dim]
+            spatial_shapes=spatial_shapes, # [num_levels, 2]
+            key_padding_mask=mask_flatten
+        ) # [B, Q, embed_dim]
+        refpoint_features = q_memory + self.initial_attention_dropout(memory_attention_out)
+        refpoint_features = self.initial_attention_norm(refpoint_features)
+        # now, get the reference points
+        # [B, Q, 2]
+        reference_points = self.proj_reference_points(refpoint_features)
+        reference_points = initial_reference_points + reference_points
+        reference_points = reference_points.sigmoid()
+
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
