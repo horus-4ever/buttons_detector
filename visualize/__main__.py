@@ -50,8 +50,9 @@ def cmd_app(args):
     for i, image_path in enumerate(all_images):
         print(f"Image [{i:<4} / {len(all_images)}]", end="\r")
         image_name = image_path.stem
-        image = Image.open(image_path)
-        result = inference.run_one(image)
+        image = Image.open(image_path).resize((512, 512))
+        result = inference.run_one(image, attention=True)
+        # img_out = Image.alpha_composite(result.prediction_image, result.attention_images)
         result.prediction_image.save(f"{out_path / image_name}.png")
     print()
     duration = (time.time_ns() - start_time) / 1e9
