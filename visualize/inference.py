@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from PIL import ImageDraw
 from dataformat.dataformat import BoundingBox
@@ -16,8 +16,7 @@ class Prediction:
     counterpart_bbox: BoundingBox
     confidence: float
     query: int
-    button_refpoint: list = field(default_factory=list)
-    counterpart_refpoint: list = field(default_factory=list)
+    ref_points: Any
 
 
 @dataclass
@@ -30,7 +29,7 @@ class AttentionImage:
 class InferenceResult:
     predictions: list[Prediction]
     prediction_image: Image.Image
-    attention_images: Any
+    attention_images: list[AttentionImage]
 
 
 class Inference:
@@ -92,8 +91,8 @@ class Inference:
         pred_boxes = outputs["pred_boxes"][0].detach().cpu()    # [Q, 2, 4]
         pred_buttons = pred_boxes[:, 0, :] # [Q, 4]
         pred_counterparts = pred_boxes[:, 1, :] # [Q, 4]
-        # [query_len, RpQ, 2]
-        reference_points = outputs["reference_points"][0].detach().cpu()
+        ref_points = outputs["reference_points"][0].detach().cpu() # [Q, RpQ, 2]
+
         # transforms to probabilities
         pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
         pred_classes = pred_probs.argmax(dim=-1)
@@ -102,7 +101,6 @@ class Inference:
         num_queries, num_classes = pred_logits.size()
         predictions = []
         for query_idx in range(num_queries):
-            button_refpoint, counterpart_refpoint = reference_points[query_idx]
             class_id = int(pred_classes[query_idx])
             confidence = float(pred_probs[query_idx, self.PAIR_CLASS_ID])
             b_xy_norm_tensor = pred_buttons[query_idx]
@@ -111,20 +109,10 @@ class Inference:
             f_pos_x, f_pos_y, f_bbox_w, f_bbox_h = self.normalized_to_pixel_xy(f_xy_norm_tensor, width, height)
             button_bbox = BoundingBox(b_pos_x, b_pos_y, b_bbox_w, b_bbox_h)
             fastener_bbox = BoundingBox(f_pos_x, f_pos_y, f_bbox_w, f_bbox_h)
-            predictions.append(
-                Prediction(
-                    class_id,
-                    button_bbox,
-                    fastener_bbox,
-                    confidence,
-                    query_idx,
-                    button_refpoint=button_refpoint,
-                    counterpart_refpoint=counterpart_refpoint
-                )
-            )
+            predictions.append(Prediction(class_id, button_bbox, fastener_bbox, confidence, query_idx, ref_points[query_idx]))
         return predictions
 
-    def _visualize_decoder_attention(self, image: Image.Image, results: dict, predictions: list[Prediction]):
+    def _visualize_decoder_attention(self, image: Image.Image, results: dict, predictions: list[Prediction]) -> list[AttentionImage]:
         """
         - attn_maps: [query_len, heads, num_levels, num_points]
         - spatial_shapes: [num_levels, 2]
@@ -132,47 +120,17 @@ class Inference:
         - predictions: [query_len]
         """
         # get the attention maps and the sampling locations
-        # [sum_l(Hl * Wl), heads, num_levels, num_points, 1]
-        attn_maps = results["decoder_attn_maps"][-1][0].unsqueeze(-1) # last decoder layer ; first image of batch
-        # [sum_l(Hl * Wl), heads, num_levels, num_points, 2]
+        attn_maps = results["decoder_attn_maps"][-1][0] # last decoder layer ; first image of batch
         sampling_locations = results["decoder_sampling_locations"][0]
-        # [query_len, RpQ, 2]
-        reference_points = results["reference_points"][0]
         # get image size and resize
-        img = image.convert("L").convert("RGBA")
+        image = image.convert("L").convert("RGBA")
         W_img, H_img = image.size
-        image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        image = image.resize((512, 512))
+        num_queries, num_heads, num_levels, num_points = attn_maps.size()
+        # flatten the attention maps and the sampling locations
+        sampling_locations = sampling_locations.reshape(num_queries, -1, 2) # [Q, n_heads * n_levels * n_points, 2]
+        attn_maps = attn_maps.reshape(num_queries, -1)[:, :, None] # [Q, n_heads * n_levels * num_points, 1]
         # create the images
-        colors = [(255, 0, 0, 200), (0, 255, 0, 200)]
-        for query in reference_points:
-            for (posx, posy), color in zip(query, colors):
-                layer = Image.new("RGBA", (W_img, H_img), (0, 0, 0, 0))
-                image_draw = ImageDraw.Draw(layer)
-                posx = float(posx * 512)
-                posy = float(posy * 512)
-                radius = 5
-                image_draw.ellipse(
-                    (posx - radius, posy - radius, posx + radius, posy + radius),
-                    fill=color,
-                )
-                image = Image.alpha_composite(image, layer)
-            return image
-        # sampling_locations = sampling_locations.view(-1, 2)
-        # attn_maps = attn_maps.view(-1, 1)
-        # for strength, (posx, posy) in zip(attn_maps, sampling_locations):
-        #     layer = Image.new("RGBA", (W_img, H_img), (0, 0, 0, 0))
-        #     image_draw = ImageDraw.Draw(layer)
-        #     posx = float(posx * 512)
-        #     posy = float(posy * 512)
-        #     radius = 5
-        #     image_draw.ellipse(
-        #         (posx - radius, posy - radius, posx + radius, posy + radius),
-        #         fill=(0, 255, 0, int(strength * 100)),
-        #     )
-        #     image = Image.alpha_composite(image, layer)
-        return image
-
-        """
         images = []
         by_confidence = sorted(
             zip(attn_maps, sampling_locations, predictions),
@@ -197,7 +155,6 @@ class Inference:
             attn_map_image = AttentionImage(attn_map_image, prediction.query)
             images.append(attn_map_image)
         return images
-        """
 
     def _visualize_predictions(self, image: Image.Image, predictions: list[Prediction]) -> Image.Image:
         W, H = image.size
@@ -208,8 +165,6 @@ class Inference:
                 continue
             button_bbox = prediction.button_bbox
             counterpart_bbox = prediction.counterpart_bbox
-            b_refpoint = prediction.button_refpoint
-            c_refpoint = prediction.counterpart_refpoint
             # first draw the button bbox
             # x, y, w, h = button_bbox.cx / W * 512, button_bbox.cy / H * 512, button_bbox.w / W * 512, button_bbox.h / H * 512
             # blackboard.rectangle(
@@ -224,22 +179,20 @@ class Inference:
             #     outline=(0, 255, 255, 255),
             #     width=2
             # )
-            # draw the button refpoint
-            posx, posy = b_refpoint
-            posx = float(posx * 512)
-            posy = float(posy * 512)
+            b_refs, c_refs =  prediction.ref_points
             radius = 5
+            px, py = b_refs
+            px, py = px * 512, py * 512
             blackboard.ellipse(
-                (posx - radius, posy - radius, posx + radius, posy + radius),
-                fill=(0, 255, 0, 255),
+                (px - radius, py - radius, px + radius, py + radius),
+                fill=(255, 0, 0, 255),
             )
-            # draw the counterpart refpoint
-            posx, posy = c_refpoint
-            posx = float(posx * 512)
-            posy = float(posy * 512)
-            radius = 5
+            px, py = c_refs
+            px, py = px * 512, py * 512
             blackboard.ellipse(
-                (posx - radius, posy - radius, posx + radius, posy + radius),
-                fill=(0, 255, 255, 255),
+                (px - radius, py - radius, px + radius, py + radius),
+                fill=(255, 0, 255, 255),
+
             )
+
         return result_image
