@@ -188,5 +188,7 @@ class Report:
     def generate_reports(self, output_path: Path):
         for report in self.reports:
             figure = self._generate_report(report)
-            figure.savefig(output_path / report.filename)
+            figure_save_path = output_path / report.filename
+            figure_save_path.parent.mkdir(parents=True, exist_ok=True)
+            figure.savefig(figure_save_path)
             plt.close(figure)
