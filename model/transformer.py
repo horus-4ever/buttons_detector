@@ -3,6 +3,8 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
+
+from model.attention import MultiscaleDeformableAttention
 from .encoder import Encoder
 from .decoder import Decoder
 
@@ -46,12 +48,20 @@ class DeformableTransformer(nn.Module):
             activation=activation
         )
         self.d_model = d_model
+        self.num_levels = nlevels
         # level embedding is learned
         self.level_embed = nn.Parameter(torch.Tensor(nlevels, d_model))
         nn.init.normal_(self.level_embed) # initializa the values
         # learned reference points
-        # reference points in the decoder are learned from linear projection from object queries
-        self.proj_reference_points = nn.Linear(d_model, 2)
+        # reference points in the decoder are learned from linear projection from pair queries
+        self.initial_mem_attention = MultiscaleDeformableAttention(
+            embed_dim=d_model,
+            num_heads=nheads,
+            num_levels=nlevels,
+            num_points=npoints
+        )
+        self.proj_initial_reference_points = nn.Linear(d_model, 2)
+        self.proj_reference_points = nn.Linear(d_model, 4)
 
     def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
@@ -99,25 +109,43 @@ class DeformableTransformer(nn.Module):
             src_key_padding_mask=mask_flatten, # [B, 1, sum_l(Hl, Wl)]
         ) # [B, sum_l(Hl * Wl), embed_dim]
 
-        B, Q, C = memory.size()
+        B, _, C = memory.size()
+        Q, _ = query_embed.size()
+        RPQ, _ = refpoints_embed.size()
         # now prepare the input to the decoder
         # 2 * [num_queries, embed_dim]
         object_embed, object_queries = torch.split(query_embed, self.d_model, 1)
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
-        # now we get the reference points by linear projection
-        # [Q, C] -> [Q, 1, C]
-        query_tokens = object_embed[:, None, :]
-        # [RqP, C] -> [1, RqP, C]
-        role_tokens = refpoints_embed[None, :, :]
-        # [Q, RqP, C]
-        token_embed = query_tokens + role_tokens # we construct from both query and reference points embedings
-        # [Q, RqP, 2]
-        reference_points = self.proj_reference_points(token_embed).sigmoid()
+
+
+        # now we want to get the initial reference points
+        # we want it to be grounded in the encoder memory
+        # computes v, k and q for memory attention
+        v_memory = memory # [B, query_len, embed_dim]
+        # [B, num_queries, embed_dim]
+        q_memory = object_queries + object_embed
+        # [B, Q, 2]
+        initial_reference_points = self.proj_initial_reference_points(q_memory).sigmoid()
+        # [B, Q, 2] -> [B, Q, num_levels, 2]
+        initial_reference_points = initial_reference_points[:, :, None, :].expand(B, Q, self.num_levels, 2)
+        # compute self-attention
+        memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.initial_mem_attention(
+            query=q_memory, # [B, num_queries, embed_dim]
+            reference_points=initial_reference_points, # [B, Q, num_levels, 2]
+            values=v_memory, # [B, Q, embed_dim]
+            spatial_shapes=spatial_shapes, # [num_levels, 2]
+        ) # [B, Q, embed_dim]
+        # now, get the reference points
+        # [B, Q, 4]
+        reference_points = self.proj_reference_points(memory_attention_out)
+        # [B, Q, 4] -> [B, Q, RpQ, 2]
+        reference_points = reference_points.reshape(B, Q, RPQ, 2).sigmoid()
+
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # [query_len, RpQ, 2]
+            reference_points=reference_points, # [B, Q, RpQ, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query_embed=object_embed, # [num_queries, embed_dim]
             refpoints_embed=refpoints_embed, # [RpQ, embed_dim]

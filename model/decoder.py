@@ -41,7 +41,7 @@ class Decoder(nn.Module):
         """
         - input: [B, num_queries, embed_dim]
         - memory: [B, sum_l(Hl * Wl), embed_dim]
-        - reference_points: [num_queries, 2]
+        - reference_points: [B, Q, RpQ, 2]
         - spatial_shapes: [num_levels, 2]
         - pos: [B, suml(Hl * Wl), embed_dim]
         - query_embed: [num_queries, embed_dim]
@@ -139,7 +139,7 @@ class DecoderLayer(nn.Module):
         """
         - input: [B, num_queries, RpQ, embed_dim]
         - memory: [B, query_len, embed_dim]
-        - reference_points: [query_len, RpQ, 2]
+        - reference_points: [B, Q, RpQ, 2]
         - query_embed: [num_queries, embed_dim]
         - refpoints_embed: [RpQ, embed_dim]
         - memory_key_padding_mask: [B, 1, sum_l(Hl, Wl)]
@@ -168,10 +168,10 @@ class DecoderLayer(nn.Module):
         # [B, num_queries * RqP, embed_dim]
         q_memory = self.with_queries_embed(add_norm_out, query_embed, refpoints_embed)
         # resize the reference_points to the right size
-        # [query_len, RpQ, 2] -> [query_len * RpQ, 2]
-        reference_points = reference_points.view(Q * self.num_ref_points_per_query, 2)
-        # [query_len * RpQ, 2] -> [batch, query_len * RpQ, num_levels, 2]
-        reference_points = reference_points[None, :, None, :].expand(B, Q * self.num_ref_points_per_query, self.num_levels, 2)
+        # [B, Q, RpQ, 2] -> [B, Q * RpQ, 2]
+        reference_points = reference_points.view(B, Q * self.num_ref_points_per_query, 2)
+        # [B, Q * RpQ, 2] -> [B, Q * RpQ, num_levels, 2]
+        reference_points = reference_points[:, :, None, :].expand(B, Q * self.num_ref_points_per_query, self.num_levels, 2)
         # compute self-attention
         memory_attention_out, memory_attention_weights, memory_attention_sampling_locations = self.memory_attention(
             query=q_memory, # [B, num_queries, embed_dim]

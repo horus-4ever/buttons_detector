@@ -136,8 +136,8 @@ class PRTR(nn.Module):
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
-        # reference_points: [num_queries, RpQ, 4]
-        Q, num_ref_points_per_query, _ = reference_points.size()
+        # reference_points: [B, num_queries, RpQ, 4]
+        B, Q, num_ref_points_per_query, _ = reference_points.size()
         # NEW: the button head now predicts the bounding box
         # -> [B, Q, embed_dim]
         class_head_input = hs.mean(dim=2) # take the mean over RpQ
