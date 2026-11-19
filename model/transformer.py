@@ -60,6 +60,8 @@ class DeformableTransformer(nn.Module):
             num_levels=nlevels,
             num_points=npoints
         )
+        self.initial_attention_norm = nn.LayerNorm(d_model)
+        self.initial_attention_dropout = nn.Dropout(dropout)
         self.proj_initial_reference_points = nn.Linear(d_model, 2)
         self.proj_reference_points = nn.Linear(d_model, 4)
 
@@ -136,9 +138,11 @@ class DeformableTransformer(nn.Module):
             values=v_memory, # [B, Q, embed_dim]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
         ) # [B, Q, embed_dim]
+        refpoint_features = q_memory + self.initial_attention_dropout(memory_attention_out)
+        refpoint_features = self.initial_attention_norm(refpoint_features)
         # now, get the reference points
         # [B, Q, 4]
-        reference_points = self.proj_reference_points(memory_attention_out)
+        reference_points = self.proj_reference_points(refpoint_features)
         # [B, Q, 4] -> [B, Q, RpQ, 2]
         reference_points = reference_points.reshape(B, Q, RPQ, 2).sigmoid()
 
