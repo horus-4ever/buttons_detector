@@ -161,7 +161,7 @@ class Report:
         
     def _generate_bar_report(self, report: ReportRequest):
         data = self._collect_data(report, last_only=True)
-        figure, ax = plt.subplots(layout="constrained")
+        figure, ax = plt.subplots(layout="constrained", figsize=(8, 6))
         n_groups = len(data)
         n_bars = len(next(iter(data.values())))
         bar_width = 0.8 / n_groups
@@ -173,9 +173,10 @@ class Report:
             ax.bar(x + offset, means, width=bar_width, label=group_name, yerr=yerr)
         ax.set_xticks(x)
         ax.set_xticklabels(next(iter(data.values())).keys())
+        ax.set_ylim(0.0, 1.1)
         ax.set_title(report.title)
         ax.set_ylabel("Value")
-        ax.legend()
+        ax.legend(loc="upper left")
         return figure
 
     def _generate_report(self, report: ReportRequest):
