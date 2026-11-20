@@ -166,19 +166,19 @@ class Inference:
             button_bbox = prediction.button_bbox
             counterpart_bbox = prediction.counterpart_bbox
             # first draw the button bbox
-            # x, y, w, h = button_bbox.cx / W * 512, button_bbox.cy / H * 512, button_bbox.w / W * 512, button_bbox.h / H * 512
-            # blackboard.rectangle(
-            #     (x - w/2, y - h/2, x + w/2, y + h/2),
-            #     outline=(0, 255, 0, 255),
-            #     width=2
-            # )
-            # # then draw the fastener bbox
-            # x, y, w, h = counterpart_bbox.cx / W * 512, counterpart_bbox.cy / H * 512, counterpart_bbox.w / W * 512, counterpart_bbox.h / H * 512
-            # blackboard.rectangle(
-            #     (x - w/2, y - h/2, x + w/2, y + h/2),
-            #     outline=(0, 255, 255, 255),
-            #     width=2
-            # )
+            x, y, w, h = button_bbox.cx / W * 512, button_bbox.cy / H * 512, button_bbox.w / W * 512, button_bbox.h / H * 512
+            blackboard.rectangle(
+                (x - w/2, y - h/2, x + w/2, y + h/2),
+                outline=(0, 255, 0, 255),
+                width=2
+            )
+            # then draw the fastener bbox
+            x, y, w, h = counterpart_bbox.cx / W * 512, counterpart_bbox.cy / H * 512, counterpart_bbox.w / W * 512, counterpart_bbox.h / H * 512
+            blackboard.rectangle(
+                (x - w/2, y - h/2, x + w/2, y + h/2),
+                outline=(0, 255, 255, 255),
+                width=2
+            )
             b_refs, c_refs =  prediction.ref_points
             radius = 5
             px, py = b_refs
