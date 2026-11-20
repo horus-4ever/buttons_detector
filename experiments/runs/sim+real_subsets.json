@@ -1,0 +1,43 @@
+{
+    "models": "experiments/models/",
+    "runs": [
+        {
+            "name": "sim+real_subset_p1_4",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_subset_p2_4",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_subset_p3_4",
+            "branch": "paper_model"
+        },
+
+        {
+            "name": "sim+real_subset_p1_8",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_subset_p2_8",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_subset_p3_8",
+            "branch": "paper_model"
+        },
+
+        {
+            "name": "sim+real_subset_p1_12",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_subset_p2_12",
+            "branch": "paper_model"
+        },
+        {
+            "name": "sim+real_subset_p3_12",
+            "branch": "paper_model"
+        }
+    ]
+}

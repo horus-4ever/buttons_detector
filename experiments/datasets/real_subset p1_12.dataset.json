@@ -1,0 +1,29 @@
+{
+    "root": "PAPER_DATASET",
+    "train": [
+        "garment_1",
+        "garment_6",
+        "garment_22",
+        "garment_8",
+        "garment_17",
+        "garment_7",
+        "garment_12",
+        "garment_16",
+        "garment_18",
+        "garment_21",
+        "garment_9",
+        "garment_15",
+        "garment_20",
+        "garment_13"
+    ],
+    "validation": [
+        "garment_10",
+        "garment_11",
+        "garment_2",
+        "garment_5"
+    ],
+    "test": [
+        "garment_internet",
+        "garment_internet_no_button"
+    ]
+}
