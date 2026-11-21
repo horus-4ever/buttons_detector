@@ -136,8 +136,9 @@ class PRTR(nn.Module):
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
-        # reference_points: [num_queries, RpQ, 4]
-        Q, num_ref_points_per_query, _ = reference_points.size()
+        # NOTE: BEGIN ABLATION reference_points: [num_queries, 2]
+        # reference_points: [num_queries, 2]
+        Q, _ = reference_points.size()
         # NEW: the button head now predicts the bounding box
         # -> [B, Q, embed_dim]
         class_head_input = hs.mean(dim=2) # take the mean over RpQ
@@ -145,9 +146,12 @@ class PRTR(nn.Module):
         # for the buttons we of course need to keep by RpQ
         # [B, query_len, RpQ, 4]
         deltas = self.pred_head(hs) # [B, Q, RpQ, 4]
+        # expand the reference points -> [Q, 2] -> [1, Q, 1, 2]
+        reference_points_exp = reference_points[None, :, None, :]
         # take the button centers, which are the first two coordinates
         centers = deltas[..., :2] # [B, Q, RpQ, 2]
-        pred_centers = (inverse_sigmoid(reference_points) + centers).sigmoid()  # [B, Q, RpQ, 2]
+        pred_centers = (inverse_sigmoid(reference_points_exp) + centers).sigmoid()  # [B, Q, RpQ, 2]
+        # NOTE: END ABLATION
         # now the width and height is given by the last two coordinates
         pred_wh = deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
         pred_boxes = torch.cat([pred_centers, pred_wh], dim=-1)  # [B, Q, RpQ, 4]
@@ -161,7 +165,7 @@ class PRTR(nn.Module):
                 "decoder_attn_maps": decoder_attn_maps, # decoder_layers * [batch, num_queries * RpQ, heads, num_levels, num_points]
                 "decoder_sampling_locations": decoder_sampling_locations, # [batch, num_queries, heads, num_levels, num_points, 2]
                 "spatial_shapes": spatial_shapes, # [num_levels, 2]
-                "reference_points": reference_points, # [query_len, RpQ, 2]
+                "reference_points": reference_points, # NOTE: ABLATION [query_len, 2]
                 "image_size": (H, W)
             }
         elif mode == Mode.EVALUATION:

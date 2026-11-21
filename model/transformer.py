@@ -106,18 +106,15 @@ class DeformableTransformer(nn.Module):
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
         # now we get the reference points by linear projection
-        # [Q, C] -> [Q, 1, C]
-        query_tokens = object_embed[:, None, :]
-        # [RqP, C] -> [1, RqP, C]
-        role_tokens = refpoints_embed[None, :, :]
-        # [Q, RqP, C]
-        token_embed = query_tokens + role_tokens # we construct from both query and reference points embedings
-        # [Q, RqP, 2]
-        reference_points = self.proj_reference_points(token_embed).sigmoid()
+        # NOTE: BEGIN ABLATION
+        # NOTE: The number of reference points is now of [Q, 2]: one reference point per query
+        # NOTE: END ABLATION
+        # [Q, 2]
+        reference_points = self.proj_reference_points(object_embed).sigmoid()
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # [query_len, RpQ, 2]
+            reference_points=reference_points, # NOTE: ABLATION [query_len, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query_embed=object_embed, # [num_queries, embed_dim]
             refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
