@@ -18,6 +18,7 @@ class Prediction:
     query: int
     button_refpoint: list = field(default_factory=list)
     counterpart_refpoint: list = field(default_factory=list)
+    sampling_locations: list = field(default_factory=list)
 
 
 @dataclass
@@ -98,6 +99,10 @@ class Inference:
         pred_probs = pred_logits.softmax(dim=-1) # [Q, C + 1]
         pred_classes = pred_probs.argmax(dim=-1)
         pred_scores = pred_probs.max(dim=-1).values
+        # 
+        sampling_locations = outputs["decoder_sampling_locations"][-1][0]
+        Q, *_ = sampling_locations.size()
+        sampling_locations = sampling_locations.view(Q, -1, 2)
         # now loop over the queries and get the predictions
         num_queries, num_classes = pred_logits.size()
         predictions = []
@@ -119,7 +124,8 @@ class Inference:
                     confidence,
                     query_idx,
                     button_refpoint=button_refpoint,
-                    counterpart_refpoint=counterpart_refpoint
+                    counterpart_refpoint=counterpart_refpoint,
+                    sampling_locations=sampling_locations[query_idx]
                 )
             )
         return predictions
@@ -134,8 +140,8 @@ class Inference:
         # get the attention maps and the sampling locations
         # [sum_l(Hl * Wl), heads, num_levels, num_points, 1]
         attn_maps = results["decoder_attn_maps"][-1][0].unsqueeze(-1) # last decoder layer ; first image of batch
-        # [sum_l(Hl * Wl), heads, num_levels, num_points, 2]
-        sampling_locations = results["decoder_sampling_locations"][0]
+        # [2 * Q, heads, num_levels, num_points, 2]
+        sampling_locations = results["decoder_sampling_locations"][-1][0]
         # [query_len, RpQ, 2]
         reference_points = results["reference_points"][0]
         # get image size and resize
@@ -143,33 +149,38 @@ class Inference:
         W_img, H_img = image.size
         image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
         # create the images
-        colors = [(255, 0, 0, 200), (0, 255, 0, 200)]
-        for query in reference_points:
-            for (posx, posy), color in zip(query, colors):
-                layer = Image.new("RGBA", (W_img, H_img), (0, 0, 0, 0))
-                image_draw = ImageDraw.Draw(layer)
-                posx = float(posx * 512)
-                posy = float(posy * 512)
-                radius = 5
-                image_draw.ellipse(
-                    (posx - radius, posy - radius, posx + radius, posy + radius),
-                    fill=color,
-                )
-                image = Image.alpha_composite(image, layer)
-            return image
-        # sampling_locations = sampling_locations.view(-1, 2)
-        # attn_maps = attn_maps.view(-1, 1)
-        # for strength, (posx, posy) in zip(attn_maps, sampling_locations):
-        #     layer = Image.new("RGBA", (W_img, H_img), (0, 0, 0, 0))
-        #     image_draw = ImageDraw.Draw(layer)
-        #     posx = float(posx * 512)
-        #     posy = float(posy * 512)
-        #     radius = 5
-        #     image_draw.ellipse(
-        #         (posx - radius, posy - radius, posx + radius, posy + radius),
-        #         fill=(0, 255, 0, int(strength * 100)),
-        #     )
-        #     image = Image.alpha_composite(image, layer)
+        # colors = [(255, 0, 0, 200), (0, 255, 0, 200)]
+        # for query in reference_points:
+        #     for (posx, posy), color in zip(query, colors):
+        #         layer = Image.new("RGBA", (W_img, H_img), (0, 0, 0, 0))
+        #         image_draw = ImageDraw.Draw(layer)
+        #         posx = float(posx * 512)
+        #         posy = float(posy * 512)
+        #         radius = 5
+        #         image_draw.ellipse(
+        #             (posx - radius, posy - radius, posx + radius, posy + radius),
+        #             fill=color,
+        #         )
+        #         image = Image.alpha_composite(image, layer)
+        #     return image
+        # # [2 * Q, heads, num_levels, num_points, 2] -> 2 * [Q, heads, num_levels, num_points, 2]
+        sampling_locations = sampling_locations[:]
+        sampling_locations = sampling_locations.view(-1, 2)
+        colors_indices = [bool((i) % 2) for i in range(len(sampling_locations))]
+        colors = [(0, 255, 200), (0, 255, 200)]
+        attn_maps = attn_maps.view(-1, 1)
+        for i, (strength, (posx, posy)) in enumerate(zip(attn_maps, sampling_locations)):
+            color = colors[colors_indices[i]] + (int(strength * 50),)
+            layer = Image.new("RGBA", (W_img, H_img), (0, 0, 0, 0))
+            image_draw = ImageDraw.Draw(layer)
+            posx = float(posx * 512)
+            posy = float(posy * 512)
+            radius = 5
+            image_draw.ellipse(
+                (posx - radius, posy - radius, posx + radius, posy + radius),
+                fill=color,
+            )
+            image = Image.alpha_composite(image, layer)
         return image
 
         """
@@ -205,25 +216,25 @@ class Inference:
         blackboard = ImageDraw.Draw(result_image)
         for prediction in predictions:
             if prediction.class_id != self.PAIR_CLASS_ID:
-                continue
+               continue
             button_bbox = prediction.button_bbox
             counterpart_bbox = prediction.counterpart_bbox
             b_refpoint = prediction.button_refpoint
             c_refpoint = prediction.counterpart_refpoint
             # first draw the button bbox
-            # x, y, w, h = button_bbox.cx / W * 512, button_bbox.cy / H * 512, button_bbox.w / W * 512, button_bbox.h / H * 512
-            # blackboard.rectangle(
-            #     (x - w/2, y - h/2, x + w/2, y + h/2),
-            #     outline=(0, 255, 0, 255),
-            #     width=2
-            # )
-            # # then draw the fastener bbox
-            # x, y, w, h = counterpart_bbox.cx / W * 512, counterpart_bbox.cy / H * 512, counterpart_bbox.w / W * 512, counterpart_bbox.h / H * 512
-            # blackboard.rectangle(
-            #     (x - w/2, y - h/2, x + w/2, y + h/2),
-            #     outline=(0, 255, 255, 255),
-            #     width=2
-            # )
+            x, y, w, h = button_bbox.cx / W * 512, button_bbox.cy / H * 512, button_bbox.w / W * 512, button_bbox.h / H * 512
+            blackboard.rectangle(
+                (x - w/2, y - h/2, x + w/2, y + h/2),
+                outline=(255, 200, 0, 255),
+                width=2
+            )
+            # then draw the fastener bbox
+            x, y, w, h = counterpart_bbox.cx / W * 512, counterpart_bbox.cy / H * 512, counterpart_bbox.w / W * 512, counterpart_bbox.h / H * 512
+            blackboard.rectangle(
+                (x - w/2, y - h/2, x + w/2, y + h/2),
+                outline=(200, 0, 255, 255),
+                width=2
+            )
             # draw the button refpoint
             posx, posy = b_refpoint
             posx = float(posx * 512)
