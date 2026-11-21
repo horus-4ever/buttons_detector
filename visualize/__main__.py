@@ -52,10 +52,17 @@ def cmd_app(args):
         image_name = image_path.stem
         image = Image.open(image_path).resize((512, 512))
         result = inference.run_one(image, attention=True)
+<<<<<<< HEAD
         image = image.convert("L").convert("RGBA")
         img_out = Image.alpha_composite(image, Image.new("RGBA", (512, 512), (0, 0, 0, 200)))
         img_out = Image.alpha_composite(img_out, result.attention_images)
         img_out.save(f"{out_path / image_name}.png")
+=======
+        img_out = image.convert("L").convert("RGBA")
+        img_out = Image.alpha_composite(img_out, Image.new("RGBA", (512, 512), (0, 0, 0, 180)))
+        combined = Image.alpha_composite(img_out, result["decoder_attention_image"])
+        combined.save(f"{out_path / image_name}.png")
+>>>>>>> 1bbba0a82d0c9b0bd08ca060b1036ac17e0088e9
     print()
     duration = (time.time_ns() - start_time) / 1e9
     print(f"Inference ended in {duration} seconds (mean time per image: {duration / len(all_images)} second)")
