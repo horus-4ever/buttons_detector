@@ -34,7 +34,7 @@ class DeformableTransformer(nn.Module):
             d_model=d_model,
             nheads=nheads,
             nlevels=nlevels,
-            npoints=npoints,
+            npoints=npoints * 2, # NOTE: ABLATION double the number of sampling points
             nlayers=decoder_nlayers,
             dim_ffn=dim_ffn,
             dropout=dropout,
