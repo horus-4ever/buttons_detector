@@ -50,7 +50,7 @@ def cmd_app(args):
     for i, image_path in enumerate(all_images):
         print(f"Image [{i:<4} / {len(all_images)}]", end="\r")
         image_name = image_path.stem
-        image = Image.open(image_path)
+        image = Image.open(image_path).resize((512, 512))
         result = inference.run_one(image)
         result.prediction_image.save(f"{out_path / image_name}.png")
     print()
