@@ -1,5 +1,8 @@
+from model.config import ModelConfig
+from model.ptmodel import PTModel
+
 from .evaluate import Evaluator, PairIoUAllEvaluation, PairDistanceAllEvaluation, EvaluationGroup
-from model.prtr import build_model_from
+from model.prtr import build_model, build_model_from, load_model_from_weights
 from model.utils import load_weights
 from model.mode import Mode
 from dataformat.dataset import DatasetConfig
@@ -16,7 +19,6 @@ import torch
 def init_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
-    parser.add_argument("--weights", type=str, required=True)
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--device", type=str, required=False, default="cuda")
     parser.add_argument("--threshold", type=float, required=False, default=0.9)
@@ -26,7 +28,8 @@ def init_parser():
 def get_evaluation_groups():
     return [
         EvaluationGroup.VISIBLE_GROUP(),
-        EvaluationGroup.INVISIBLE_GROUP()
+        EvaluationGroup.INVISIBLE_GROUP(),
+        EvaluationGroup.FASTENED_GROUP()
     ]
 
 def get_evaluator(threshold: float = 0.9) -> Evaluator:
@@ -47,7 +50,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # get the arguments
     model_path = Path(args.model)
-    weights_path = Path(args.weights)
     dataset_path = Path(args.dataset)
     device_name = args.device
     threshold = args.threshold
@@ -55,9 +57,7 @@ if __name__ == "__main__":
     device = torch.device(device_name)
     print("Using device:", device)
     # load the model and its weights
-    model = build_model_from(model_path)
-    model.to(device=device)
-    load_weights(model, weights=weights_path, device=device)
+    model = load_model_from_weights(model_path, device=device)
     model.eval()
     # get the dataset
     dataset = DatasetConfig.open(config_path=dataset_path).load()
@@ -91,7 +91,7 @@ if __name__ == "__main__":
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda")
     )
-    for loader in (train_loader, val_loader, test_loader):
+    for loader in (val_loader, test_loader):
         outputs = []
         for images, padding_mask, annotations, (W, H) in loader:
             annotations = annotations[0] # batch size is 1 for evaluation
