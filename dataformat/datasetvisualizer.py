@@ -1,3 +1,5 @@
+import math
+
 import matplotlib.pyplot as plt
 from pathlib import Path
 import json
@@ -37,10 +39,12 @@ def plot_counterpart_size(annotations: list[Annotation], im_size: int = 512):
 def get_counterpart_size_stats(annotations: list[Annotation], im_size: int = 512):
     widths = []
     heights = []
+    diagonals = []
     for ann in annotations:
         for pair in ann.cloth.pairs:
             widths.append(pair.counterpart.bbox.w * im_size)
             heights.append(pair.counterpart.bbox.h * im_size)
+            diagonals.append(math.sqrt((pair.counterpart.bbox.w * im_size) ** 2 + (pair.counterpart.bbox.h * im_size) ** 2))
     return {
         "width": {
             "min": min(widths),
@@ -53,6 +57,12 @@ def get_counterpart_size_stats(annotations: list[Annotation], im_size: int = 512
             "max": max(heights),
             "mean": sum(heights) / len(heights),
             "median": sorted(heights)[len(heights) // 2]
+        },
+        "diagonals": {
+            "min": min(diagonals),
+            "max": max(diagonals),
+            "mean": sum(diagonals) / len(diagonals),
+            "median": sorted(diagonals)[len(diagonals) // 2]
         }
     }
 
@@ -98,26 +108,3 @@ def get_button_size_stats(annotations: list[Annotation], im_size: int = 512):
             "median": sorted(heights)[len(heights) // 2]
         }
     }
-
-
-if __name__ == "__main__":
-    dataset_path = Path("new_format.dataset.json")
-    dataset = DatasetConfig.open(config_path=dataset_path).load()
-    # training dataset is representative of the dataset so let's use it
-    train_dataset = dataset.train_annotations
-    plot_counterpart_kmeans(train_dataset)
-    plot_buttons_distribution(train_dataset)
-    plot_counterpart_size(train_dataset)
-    counterpart_stats = get_counterpart_size_stats(train_dataset)
-    print("counterpart Size Statistics:")
-    for dimension, stats in counterpart_stats.items():
-        print(f"  {dimension.capitalize()}:")
-        for stat, value in stats.items():
-            print(f"    {stat.capitalize()}: {value}")
-
-    button_stats = get_button_size_stats(train_dataset)
-    print("\nButton Size Statistics:")
-    for dimension, stats in button_stats.items():
-        print(f"  {dimension.capitalize()}:")
-        for stat, value in stats.items():
-            print(f"    {stat.capitalize()}: {value}")
