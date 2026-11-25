@@ -114,22 +114,20 @@ class Inference:
         """
         Visualize the reference points.
         """
-        # [Q, RpQ, 2]
+        # [Q, 2]
         reference_points = results["reference_points"]
-        button_ref_points = reference_points[:, 0, :] # [Q, 2]
-        counterpart_ref_points = reference_points[:, 1, :] # [Q, 2]
-        colors = [(0, 255, 0, 255), (0, 0, 255, 255)]
+        color = (0, 255, 0, 255)
         radius = 5
         # now create the image
         result_image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
         blackboard = ImageDraw.Draw(result_image)
-        for color, points in zip(colors, [button_ref_points, counterpart_ref_points]):
-            for posx, posy in points:
-                posx, posy = posx * 512, posy * 512
-                blackboard.ellipse(
-                    (posx - radius, posy - radius, posx + radius, posy + radius),
-                    fill=color
-                )
+        for points in reference_points:
+            posx, posy = points
+            posx, posy = posx * 512, posy * 512
+            blackboard.ellipse(
+                (posx - radius, posy - radius, posx + radius, posy + radius),
+                fill=color
+            )
         return result_image
 
     def _visualize_decoder_attention(self, results: dict, layer: int = -1):
@@ -151,7 +149,7 @@ class Inference:
             radius = 5
             draw.ellipse(
                 (posx - radius, posy - radius, posx + radius, posy + radius),
-                fill=(0, 255, 200, int(50 * attn.item()))
+                fill=(0, 255, 200, int(80 * attn.item()))
             )
             result_image = Image.alpha_composite(result_image, overlay)
         return result_image
