@@ -166,11 +166,16 @@ class Report:
         n_bars = len(next(iter(data.values())))
         bar_width = 0.8 / n_groups
         x = np.arange(n_bars)
+        print("#######", report.title.capitalize(), "#######")
         for i, (group_name, group_data) in enumerate(data.items()):
+            print("~~~~", group_name)
             offset = (i - (n_groups - 1) / 2) * bar_width
             means = [np.mean(group_data[line_name]) for line_name in group_data]
             yerr = [np.std(group_data[line_name]) for line_name in group_data]
+            for _lname, _ldata, _lstd in zip(list(group_data.keys()), means, yerr):
+                print(f"{_lname}: mean={_ldata:.4f} ; std={_lstd:.4f}")
             ax.bar(x + offset, means, width=bar_width, label=group_name, yerr=yerr)
+        print()
         ax.set_xticks(x)
         ax.set_xticklabels(next(iter(data.values())).keys())
         ax.set_ylim(0.0, 1.1)
