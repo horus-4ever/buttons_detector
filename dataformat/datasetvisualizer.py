@@ -40,11 +40,22 @@ def get_counterpart_size_stats(annotations: list[Annotation], im_size: int = 512
     widths = []
     heights = []
     diagonals = []
+    total_number = 0
+    n_fastened = 0
+    n_invisible = 0
+    n_visible = 0
     for ann in annotations:
         for pair in ann.cloth.pairs:
+            total_number += 1
             widths.append(pair.counterpart.bbox.w * im_size)
             heights.append(pair.counterpart.bbox.h * im_size)
             diagonals.append(math.sqrt((pair.counterpart.bbox.w * im_size) ** 2 + (pair.counterpart.bbox.h * im_size) ** 2))
+            if pair.fastened:
+                n_fastened += 1
+            elif pair.counterpart.visible:
+                n_visible += 1
+            elif not pair.counterpart.visible:
+                n_invisible += 1
     return {
         "width": {
             "min": min(widths),
@@ -63,6 +74,11 @@ def get_counterpart_size_stats(annotations: list[Annotation], im_size: int = 512
             "max": max(diagonals),
             "mean": sum(diagonals) / len(diagonals),
             "median": sorted(diagonals)[len(diagonals) // 2]
+        },
+        "visibility": {
+            "fastened": f"{n_fastened / total_number * 100:.2f}",
+            "visible": f"{n_visible / total_number * 100:.2f}",
+            "invisible": f"{n_invisible / total_number * 100:.2f}"
         }
     }
 
