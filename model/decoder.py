@@ -144,6 +144,10 @@ class DecoderLayer(nn.Module):
         - refpoints_embed: [RpQ, embed_dim]
         - memory_key_padding_mask: [B, 1, sum_l(Hl, Wl)]
         """
+        # NOTE ============== ABLATION no refpoints embedding =============
+        refpoints_embed = torch.zeros_like(refpoints_embed)
+        # NOTE ============================================================
+
         B, Q, RQP, C = input.size()
         # [B, num_queries, RpQ, embed_dim] -> [B, RpQ * num_queries, embed_dim]
         input = input.view(B, Q * RQP, C)
