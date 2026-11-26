@@ -48,8 +48,8 @@ def cmd_app(args):
     all_images = iter_image_files(imgs_path)
     start_time = time.time_ns()
     for i, image_path in enumerate(all_images):
-        print(f"Image [{i:<4} / {len(all_images)}]", end="\r")
         image_name = image_path.stem
+        print(f"# Image [{i:<4} / {len(all_images)}] ({image_name})", end="\n")
         image = Image.open(image_path).resize((512, 512))
         result = inference.run_one(image, attention=True)
         img_out = image.convert("L").convert("RGBA")

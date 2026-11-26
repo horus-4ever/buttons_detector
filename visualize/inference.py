@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 from PIL import ImageDraw
+import numpy as np
 from dataformat.dataformat import BoundingBox
 from pathlib import Path
 from PIL import Image
@@ -53,12 +54,15 @@ class Inference:
 
     def _get_results(self, image: Image.Image, results: dict):
         predictions = self._get_predictions(results)
-        attention_image = self._visualize_decoder_attention(results)
+        attention_image = self._visualize_decoder_attention(predictions, results)
+        pred_attention_image = self._visualize_pred_decoder_attention(predictions, results)
         predictions_image = self._visualize_predictions(image, predictions)
         refpoints_image = self._visualize_reference_points(results)
+        self._sampling_points_distance_pred(predictions, results)
         return {
             "predictions": predictions,
             "decoder_attention_image": attention_image,
+            "pred_decoder_attention_image": pred_attention_image,
             "predictions_image": predictions_image,
             "refpoints_image": refpoints_image
         }
@@ -130,7 +134,7 @@ class Inference:
             )
         return result_image
 
-    def _visualize_decoder_attention(self, results: dict, layer: int = -1, separated = True):
+    def _visualize_decoder_attention(self, predictions: list[Prediction], results: dict, layer: int = -1, separated = True):
         """
         Visualize the decoder attention.
         """
@@ -162,6 +166,53 @@ class Inference:
             result_image = Image.alpha_composite(result_image, overlay)
         return result_image
 
+    def _visualize_pred_decoder_attention(self, predictions: list[Prediction], results: dict, layer: int = -1, separated = True):
+        """
+        Visualize the decoder attention.
+        """
+        # get the attention maps and the sampling locations
+        attn_maps = results["decoder_attn_maps"][layer][0] # last decoder layer ; first image of batch
+        # n * [B, Q, n_heads, n_levels, n_points, 2]
+        sampling_locations = results["decoder_sampling_locations"][layer][0] # [Q, n_heads, n_levels, n_points, 2]
+        Q, n_heads, n_levels, n_points, _ = sampling_locations.size()
+        the_constant = n_heads * n_levels * n_points
+        sampling_locations = sampling_locations.reshape(Q, -1, 2) # [Q * n_heads * n_levels * n_points, 2]
+        attn_maps = attn_maps.reshape(Q, -1, 1) # [Q * n_heads * n_levels * num_points, 1]
+        # create the images
+        result_image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        for prediction in predictions:
+            if prediction.class_id != self.PAIR_CLASS_ID:
+                continue
+            query = 2 * prediction.query
+            for i, (attn, (posx, posy)) in enumerate(zip(attn_maps[query], sampling_locations[query])):
+                overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(overlay)
+                posx, posy = posx * 512, posy * 512
+                radius = 5
+                # we can visualize per sub-query type
+                # in violet the first type, and in green the second type
+                color = (255, 0, 200)
+                draw.ellipse(
+                    (posx - radius, posy - radius, posx + radius, posy + radius),
+                    fill=color + (int(150 * attn.item()),)
+                )
+                result_image = Image.alpha_composite(result_image, overlay)
+            query = query + 1
+            for i, (attn, (posx, posy)) in enumerate(zip(attn_maps[query], sampling_locations[query])):
+                overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(overlay)
+                posx, posy = posx * 512, posy * 512
+                radius = 5
+                # we can visualize per sub-query type
+                # in violet the first type, and in green the second type
+                color = (0, 255, 200)
+                draw.ellipse(
+                    (posx - radius, posy - radius, posx + radius, posy + radius),
+                    fill=color + (int(50 * attn.item()),)
+                )
+                result_image = Image.alpha_composite(result_image, overlay)
+        return result_image
+
     def _visualize_predictions(self, image: Image.Image, predictions: list[Prediction]) -> Image.Image:
         W, H = image.size
         result_image= image.copy().resize((512, 512)).convert("RGBA")
@@ -186,3 +237,43 @@ class Inference:
                 width=2
             )
         return result_image
+
+    def _sampling_points_distance_pred(self, predictions: list[Prediction], results: dict):
+        # n * [B, Q, n_heads, n_levels, n_points, 2]
+        sampling_locations = results["decoder_sampling_locations"][-1][0] # [Q, n_heads, n_levels, n_points, 2]
+        attn_maps = results["decoder_attn_maps"][-1][0] # [Q, n_heads, n_levels, n_points, 1]
+        reference_points = results["reference_points"] # [Q, RpQ, 2]
+        Q, n_heads, n_levels, n_points, _ = sampling_locations.size()
+        # [Q, n_heads * n_levels * n_points, 2]
+        sampling_locations = sampling_locations.reshape(Q, -1, 2)
+        # [Q, n_heads * n_levels * n_points, 1]
+        attn_maps = attn_maps.reshape(Q, -1, 1).squeeze(2)
+        # [Q, n_heads * n_levels * n_points]
+        button_distances = []
+        counterpart_distances = []
+        for prediction in predictions:
+            if prediction.class_id != self.PAIR_CLASS_ID:
+                continue
+            button_bbox = prediction.button_bbox
+            counterpart_bbox = prediction.counterpart_bbox
+            query = 2 * prediction.query
+            points = sampling_locations[query] # buttons points only
+            normalized = points - torch.tensor([button_bbox.cx / 512, button_bbox.cy / 512])
+            distances = torch.linalg.vector_norm(normalized, dim=1)
+            weighted = distances * attn_maps[query]
+            mean = weighted.sum() / attn_maps[query].sum()
+            button_distances.append(mean)
+
+            query = 2 * prediction.query + 1
+            points = sampling_locations[query] # buttons points only
+            normalized = points - torch.tensor([counterpart_bbox.cx / 512, counterpart_bbox.cy / 512])
+            distances = torch.linalg.vector_norm(normalized, dim=1)
+            weighted = distances * attn_maps[query]
+            mean = weighted.sum() / attn_maps[query].sum()
+            counterpart_distances.append(mean)
+        m_button = np.mean(button_distances)
+        m_counterparts = np.mean(counterpart_distances)
+        print(
+            f"Buttons: {m_button * 512:.2f}"
+            f"\nCounterpart: {m_counterparts * 512: .2f}"
+        )
