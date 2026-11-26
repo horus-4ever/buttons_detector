@@ -50,6 +50,7 @@ class PTModelData:
 class ReportType(StrEnum):
     CURVE = "curve"
     BAR = "bar"
+    LAST_CURVE = "last_curve"
 
 
 @dataclass
@@ -158,6 +159,30 @@ class Report:
         ax.set_ylabel("Value")
         ax.legend()
         return figure
+
+    def _generate_last_curve_report(self, report: ReportRequest):
+        data = self._collect_data(report, last_only=True)
+        figure, ax = plt.subplots(layout="constrained", figsize=(8, 6))
+        groups = list(data.keys())
+        subgroups = list(next(iter(data.values())).keys())
+        x = np.arange(len(groups))
+        print("#######", report.title.capitalize(), "#######")
+        for name in subgroups:
+            means = np.array([np.mean(data[group][name]) for group in groups])
+            stds = np.array([np.std(data[group][name]) for group in groups])
+            line, = ax.plot(x, means, marker="o", markersize=5, linewidth=2, label=name)
+            ax.fill_between(x, means - stds, means + stds, color=line.get_color(), alpha=0.15, linewidth=0)
+            print("~~~~", name)
+            for group, mean, std in zip(groups, means, stds):
+                print(f"{group}: mean={mean:.4f} ; std={std:.4f}")
+        ax.set_xticks(x)
+        ax.set_xticklabels(groups)
+        ax.set_ylim(0.0, 1.1)
+        ax.set_title(report.title)
+        ax.set_ylabel("Value")
+        ax.grid(alpha=0.15)
+        ax.legend(loc="upper left")
+        return figure
         
     def _generate_bar_report(self, report: ReportRequest):
         data = self._collect_data(report, last_only=True)
@@ -190,6 +215,8 @@ class Report:
                 return self._generate_curve_report(report)
             case ReportType.BAR:
                 return self._generate_bar_report(report)
+            case ReportType.LAST_CURVE:
+                return self._generate_last_curve_report(report)
 
     def generate_reports(self, output_path: Path):
         for report in self.reports:
