@@ -130,7 +130,7 @@ class Inference:
             )
         return result_image
 
-    def _visualize_decoder_attention(self, results: dict, layer: int = -1):
+    def _visualize_decoder_attention(self, results: dict, layer: int = -1, separated = True):
         """
         Visualize the decoder attention.
         """
@@ -138,18 +138,26 @@ class Inference:
         attn_maps = results["decoder_attn_maps"][layer][0] # last decoder layer ; first image of batch
         # n * [B, Q, n_heads, n_levels, n_points, 2]
         sampling_locations = results["decoder_sampling_locations"][layer][0] # [Q, n_heads, n_levels, n_points, 2]
+        Q, n_heads, n_levels, n_points, _ = sampling_locations.size()
+        the_constant = n_heads * n_levels * n_points
         sampling_locations = sampling_locations.reshape(-1, 2) # [Q * n_heads * n_levels * n_points, 2]
         attn_maps = attn_maps.reshape(-1, 1) # [Q * n_heads * n_levels * num_points, 1]
         # create the images
         result_image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-        for attn, (posx, posy) in zip(attn_maps, sampling_locations):
+        for i, (attn, (posx, posy)) in enumerate(zip(attn_maps, sampling_locations)):
             overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
             draw = ImageDraw.Draw(overlay)
             posx, posy = posx * 512, posy * 512
             radius = 5
+            # we can visualize per sub-query type
+            # in violet the first type, and in green the second type
+            if (i // the_constant) % 2 or not separated:
+                color = (0, 255, 200)
+            else:
+                color = (255, 0, 200)
             draw.ellipse(
                 (posx - radius, posy - radius, posx + radius, posy + radius),
-                fill=(0, 255, 200, int(50 * attn.item()))
+                fill=color + (int(50 * attn.item()),)
             )
             result_image = Image.alpha_composite(result_image, overlay)
         return result_image
