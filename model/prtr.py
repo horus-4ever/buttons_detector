@@ -136,7 +136,6 @@ class PRTR(nn.Module):
             refpoints_embed=self.refpoints_embed.weight, # [RpQ, embed_dim]
         )
         # hs: [B, query_len, embed_dim]
-        # NOTE: BEGIN ABLATION reference_points: [num_queries, 2]
         # reference_points: [num_queries, 2]
         Q, _ = reference_points.size()
         # NEW: the button head now predicts the bounding box
@@ -151,7 +150,6 @@ class PRTR(nn.Module):
         # take the button centers, which are the first two coordinates
         centers = deltas[..., :2] # [B, Q, RpQ, 2]
         pred_centers = (inverse_sigmoid(reference_points_exp) + centers).sigmoid()  # [B, Q, RpQ, 2]
-        # NOTE: END ABLATION
         # now the width and height is given by the last two coordinates
         pred_wh = deltas[..., 2:].sigmoid()  # [B, Q, RpQ, 2]
         pred_boxes = torch.cat([pred_centers, pred_wh], dim=-1)  # [B, Q, RpQ, 4]

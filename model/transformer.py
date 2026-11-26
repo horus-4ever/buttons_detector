@@ -52,6 +52,14 @@ class DeformableTransformer(nn.Module):
         # learned reference points
         # reference points in the decoder are learned from linear projection from object queries
         self.proj_reference_points = nn.Linear(d_model, 2)
+        # NOTE: ABLATION refpoints
+        self._get_reference_points()
+
+    # ================= NOTE: ABLATION refpoints ==================
+    def _get_reference_points(self):
+        from REFPOINTS import REFPOINTS
+        self.reference_points = nn.Parameter(torch.tensor(REFPOINTS), requires_grad=False)
+    # =============================================================
 
     def forward(self, features, query_embed, refpoints_embed, pos_embeds, masks):
         """
@@ -106,15 +114,13 @@ class DeformableTransformer(nn.Module):
         # [num_queries, embed_dim] -> [B, num_queries, embed_dim]
         object_queries = object_queries.expand(B, -1, -1)
         # now we get the reference points by linear projection
-        # NOTE: BEGIN ABLATION
-        # NOTE: The number of reference points is now of [Q, 2]: one reference point per query
-        # NOTE: END ABLATION
         # [Q, 2]
         reference_points = self.proj_reference_points(object_embed).sigmoid()
+        reference_points = self.reference_points # NOTE: ABLATION reference points
         result, decoder_attn_maps, decoder_sampling_locations = self.decoder(
             input=object_queries, # [B, num_queries, embed_dim]
             memory=memory, # [B, sum_l(Hl * Wl), embed_dim]
-            reference_points=reference_points, # NOTE: ABLATION [query_len, 2]
+            reference_points=reference_points, # [query_len, 2]
             spatial_shapes=spatial_shapes, # [num_levels, 2]
             query_embed=object_embed, # [num_queries, embed_dim]
             refpoints_embed=refpoints_embed, # [RpQ, embed_dim]
