@@ -256,21 +256,23 @@ class Inference:
                 continue
             button_bbox = prediction.button_bbox
             counterpart_bbox = prediction.counterpart_bbox
+            b_bbox_center = torch.tensor([button_bbox.cx / 512, button_bbox.cy / 512])
+            c_bbox_center = torch.tensor([counterpart_bbox.cx / 512, counterpart_bbox.cy / 512])
+            # compute the center of mass for the buttons
             query = 2 * prediction.query
             points = sampling_locations[query] # buttons points only
-            normalized = points - torch.tensor([button_bbox.cx / 512, button_bbox.cy / 512])
-            distances = torch.linalg.vector_norm(normalized, dim=1)
-            weighted = distances * attn_maps[query]
-            mean = weighted.sum() / attn_maps[query].sum()
-            button_distances.append(mean)
-
+            weighted = points * attn_maps[query][:, None]
+            buttons_centers = weighted.sum(dim=0) / attn_maps[query].sum()
+            # now for the counterpart
             query = 2 * prediction.query + 1
-            points = sampling_locations[query] # buttons points only
-            normalized = points - torch.tensor([counterpart_bbox.cx / 512, counterpart_bbox.cy / 512])
-            distances = torch.linalg.vector_norm(normalized, dim=1)
-            weighted = distances * attn_maps[query]
-            mean = weighted.sum() / attn_maps[query].sum()
-            counterpart_distances.append(mean)
+            points = sampling_locations[query] # counterparts points only
+            weighted = points * attn_maps[query][:, None]
+            counterpart_centers = weighted.sum(dim=0) / attn_maps[query].sum()
+            # compute the distances
+            button_dist = torch.linalg.vector_norm(buttons_centers - b_bbox_center)
+            counterpart_dist = torch.linalg.vector_norm(counterpart_centers - c_bbox_center)
+            button_distances.append(button_dist)
+            counterpart_distances.append(counterpart_dist)
         m_button = np.mean(button_distances)
         m_counterparts = np.mean(counterpart_distances)
         print(
