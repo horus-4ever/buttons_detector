@@ -455,9 +455,7 @@ class PairMeanCounterpartDistanceEvaluation(Evaluation):
             annotation = pred_annotations[best_gt_index]
             if not annotation.counterpart.visible and not annotation.counterpart.fastened:
                 counterpart_distances.append(d_counterpart)
-        return {
-            "mean_c_dist": np.mean(counterpart_distances)
-        }
+        return np.mean(counterpart_distances)
 
 
 class PairIoUAllEvaluation(Evaluation):
