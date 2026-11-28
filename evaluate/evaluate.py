@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import time
 from typing import Any, Callable, override
 
+import numpy as np
 import torch
 from torchvision.ops import box_iou
 from dataformat.dataformat import *
@@ -407,6 +408,58 @@ class PairDistanceEvaluation(Evaluation):
         return {name: EvaluationResult.from_running(running) for name, running in groups.items()}
 
 
+class PairMeanCounterpartDistanceEvaluation(Evaluation):
+    def __init__(self, distance_threshold: float, image_size: int = 512):
+        self.distance_threshold = distance_threshold # the distance threshold only applies to buttons
+        self.image_size = image_size
+
+    @override
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        counterpart_distances = []
+        # sort by highest confidence order
+        predictions = self.sort_by_confidence(predictions, ascending=False)
+        matched = torch.zeros(len(annotations), dtype=torch.bool)
+        # compute the AP based on greedy matching
+        for prediction in predictions:
+            # get the annotations corresponding to the image of the prediction
+            image_ann_indices = torch.tensor([index for index, pair in enumerate(annotations) if pair.image_id == prediction.image_id])
+            pred_annotations = [pair for pair in annotations if pair.image_id == prediction.image_id]
+            if not pred_annotations: # no ground truth for this image, we skip it
+                continue
+            # get the button and counterpart centers (single tensor)
+            pred_button_center = prediction.button_box[:2] # [2]
+            pred_counterpart_center = prediction.counterpart_box[:2] # [2]
+            # get the ground truth button and counterpart centers (list of tensors)
+            gt_button_centers = torch.stack([pair.button.bbox.to_tensor()[:2] for pair in pred_annotations]) # [num_gt, 2]
+            gt_counterpart_centers = torch.stack([pair.counterpart.bbox.to_tensor()[:2] for pair in pred_annotations]) # [num_gt, 2]
+            # compute for each ground truth the distance to the predicted button and counterpart
+            distance_button = torch.linalg.vector_norm(
+                pred_button_center.unsqueeze(0) - gt_button_centers,
+                dim=1
+            ) # [num_gt]
+            distance_counterpart = torch.linalg.vector_norm(
+                pred_counterpart_center.unsqueeze(0) - gt_counterpart_centers,
+                dim=1
+            ) # [num_gt]
+            # already matched ground truths should be ignored (set to infinity)
+            distance_button[matched[image_ann_indices]] = math.inf
+            distance_counterpart[matched[image_ann_indices]] = math.inf
+            # match only if both distances for the button and the counterpart are below the threshold
+            keep = (distance_button <= self.distance_threshold / self.image_size)
+            if not keep.any():
+                continue
+            _, best_gt_index = distance_button.min(dim=0)
+            matched[image_ann_indices[best_gt_index]] = True
+            d_counterpart = distance_counterpart[best_gt_index] # we get the distance to the counterpart
+            # now we compute the running AP for the groups
+            annotation = pred_annotations[best_gt_index]
+            if not annotation.counterpart.visible and not annotation.counterpart.fastened:
+                counterpart_distances.append(d_counterpart)
+        return {
+            "mean_c_dist": np.mean(counterpart_distances)
+        }
+
+
 class PairIoUAllEvaluation(Evaluation):
     """
     Runs all the evaluations based on IoU metric, at the IoU thresholds 0.5, 0.75 and 0.9.
@@ -478,11 +531,15 @@ class PairDistanceAllEvaluation(Evaluation):
         ap_3_evaluator = PairDistanceEvaluation(distance_threshold=3.0, groups=self.groups)
         ap_5_evaluator = PairDistanceEvaluation(distance_threshold=5.0, groups=self.groups)
         ap_10_evaluator = PairDistanceEvaluation(distance_threshold=10.0, groups=self.groups)
+        mean_3_evaluator = PairMeanCounterpartDistanceEvaluation(distance_threshold=3.0)
+        mean_5_evaluator = PairMeanCounterpartDistanceEvaluation(distance_threshold=5.0)
         # launch parallel tasks
         AP_1 = ap_1_evaluator.evaluate(predictions, annotations)
         AP_3 = ap_3_evaluator.evaluate(predictions, annotations)
         AP_5 = ap_5_evaluator.evaluate(predictions, annotations)
         AP_10 = ap_10_evaluator.evaluate(predictions, annotations)
+        CM_3 = mean_3_evaluator.evaluate(predictions, annotations)
+        CM_5 = mean_5_evaluator.evaluate(predictions, annotations)
         group_names = list(group.name for group in self.groups)
         AP = self._group_mean([AP_1, AP_3, AP_5, AP_10], group_names) # type: ignore
         metrics = {
@@ -491,9 +548,11 @@ class PairDistanceAllEvaluation(Evaluation):
                 "AP_3": AP_3[name].to_dict(), # type: ignore
                 "AP_5": AP_5[name].to_dict(), # type: ignore
                 "AP_10": AP_10[name].to_dict(), # type: ignore
-                "AP": AP[name].to_dict()
+                "AP": AP[name].to_dict(),
             } for name in group_names
         }
+        metrics["INVISIBLE"]["CM_3"] = CM_3 # type: ignore
+        metrics["INVISIBLE"]["CM_5"] = CM_5 # type: ignore
         return metrics
 
 
