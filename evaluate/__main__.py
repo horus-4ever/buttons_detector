@@ -1,4 +1,4 @@
-from .evaluate import Evaluator, PairIoUAllEvaluation, PairDistanceAllEvaluation, EvaluationGroup
+from .evaluate import Evaluator, PairIoUAllEvaluation, PairDistanceAllEvaluation, EvaluationGroup, CounterpartDistanceAllEvaluation
 from model.prtr import build_model_from
 from model.utils import load_weights
 from model.mode import Mode
@@ -36,9 +36,7 @@ def get_evaluator(threshold: float = 0.9) -> Evaluator:
     evaluator = Evaluator()
     groups = get_evaluation_groups()
     evaluator.add_evaluation("distance", PairDistanceAllEvaluation(groups=groups))
-    evaluator.add_evaluation("iou", PairIoUAllEvaluation(groups=groups))
-    evaluator.add_evaluation("distance_threshold", PairDistanceAllEvaluation(confidence_threshold=threshold, groups=groups))
-    evaluator.add_evaluation("iou_threshold", PairIoUAllEvaluation(confidence_threshold=threshold, groups=groups))
+    evaluator.add_evaluation("counterpart", CounterpartDistanceAllEvaluation())
     return evaluator
 
 
@@ -91,7 +89,7 @@ if __name__ == "__main__":
         collate_fn=collate_fn,
         pin_memory=(device.type == "cuda")
     )
-    for loader in (train_loader, val_loader, test_loader):
+    for loader in (val_loader, test_loader):
         outputs = []
         for images, padding_mask, annotations, (W, H) in loader:
             annotations = annotations[0] # batch size is 1 for evaluation
@@ -101,13 +99,4 @@ if __name__ == "__main__":
                 output = model(images, padding_mask, Mode.EVALUATION)
                 outputs.append((annotations, output))
         evaluations = evaluator.evaluate(outputs)
-        print("#### EVALUATION ####")
-        print("~~~~ Pair Distance AP ~~~~")
-        pprint.pprint(evaluations["distance"])
-        print("~~~~ Pair IoU AP ~~~~")
-        pprint.pprint(evaluations["iou"])
-        print(f"~~~~ Pair Distance AP (>={threshold}) ~~~~")
-        pprint.pprint(evaluations["distance_threshold"])
-        print(f"~~~~ Pair IoU AP (>={threshold}) ~~~~")
-        pprint.pprint(evaluations["iou_threshold"])
-        print()
+        pprint.pprint(evaluations)

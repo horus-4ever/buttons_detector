@@ -419,6 +419,7 @@ class PairMeanCounterpartDistanceEvaluation(Evaluation):
         # sort by highest confidence order
         predictions = self.sort_by_confidence(predictions, ascending=False)
         matched = torch.zeros(len(annotations), dtype=torch.bool)
+        nb_gt = sum(not ann.fastened and not ann.counterpart.visible for ann in annotations)
         # compute the AP based on greedy matching
         for prediction in predictions:
             # get the annotations corresponding to the image of the prediction
@@ -453,9 +454,15 @@ class PairMeanCounterpartDistanceEvaluation(Evaluation):
             d_counterpart = distance_counterpart[best_gt_index] # we get the distance to the counterpart
             # now we compute the running AP for the groups
             annotation = pred_annotations[best_gt_index]
-            if not annotation.counterpart.visible and not annotation.counterpart.fastened:
+            if not annotation.counterpart.visible and not annotation.fastened:
                 counterpart_distances.append(d_counterpart)
-        return np.mean(counterpart_distances)
+        return {
+            "mean": np.mean(counterpart_distances),
+            "median": np.median(counterpart_distances),
+            "std": np.std(counterpart_distances),
+            "n": len(counterpart_distances),
+            "nb_gt": nb_gt
+        }
 
 
 class PairIoUAllEvaluation(Evaluation):
@@ -551,6 +558,24 @@ class PairDistanceAllEvaluation(Evaluation):
         }
         metrics["INVISIBLE"]["CM_3"] = CM_3 # type: ignore
         metrics["INVISIBLE"]["CM_5"] = CM_5 # type: ignore
+        return metrics
+
+
+class CounterpartDistanceAllEvaluation(Evaluation):
+    def __init__(self, confidence_threshold: float = 0.0):
+        self.confidence_threshold = confidence_threshold
+
+    @override
+    def evaluate(self, predictions: list[Prediction], annotations: list[PairWrapper]):
+        predictions = self.filter_confidence(predictions, self.confidence_threshold)
+        mean_3_evaluator = PairMeanCounterpartDistanceEvaluation(distance_threshold=3.0)
+        mean_5_evaluator = PairMeanCounterpartDistanceEvaluation(distance_threshold=5.0)
+        # launch parallel tasks
+        CM_3 = mean_3_evaluator.evaluate(predictions, annotations)
+        CM_5 = mean_5_evaluator.evaluate(predictions, annotations)
+        metrics = {}
+        metrics["CM_3"] = CM_3
+        metrics["CM_5"] = CM_5
         return metrics
 
 
